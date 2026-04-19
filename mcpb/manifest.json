@@ -1,0 +1,29 @@
+{
+  "dxt_version": "0.1",
+  "name": "dataviz-toolkit",
+  "display_name": "Dataviz Toolkit",
+  "version": "1.0.0",
+  "description": "Edikted Dataviz platform tools — query data, manage dashboards, refresh sources, deploy reports",
+  "long_description": "Provides MCP tools for the Edikted Dataviz platform: list/describe tables, run SQL against DuckDB, list/create/save canvas dashboards, trigger extracts, upload dynamic reports, send PDF reports via email. On first run the server prompts for per-user credentials (stored locally, never in chat).",
+  "author": {
+    "name": "Edikted Data Team",
+    "email": "assaf@edikted.com"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ediktedrnd/dataviz-plugin"
+  },
+  "license": "PROPRIETARY",
+  "keywords": ["dataviz", "dashboards", "duckdb", "analytics", "edikted"],
+  "server": {
+    "type": "node",
+    "entry_point": "server/index.js",
+    "mcp_config": {
+      "command": "node",
+      "args": ["${__dirname}/server/index.js"],
+      "env": {
+        "DATAVIZ_URL": "https://dataviz.edikted.tech"
+      }
+    }
+  }
+}
