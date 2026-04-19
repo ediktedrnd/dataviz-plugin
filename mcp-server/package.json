@@ -1,0 +1,17 @@
+{
+  "name": "dataviz-mcp-server",
+  "version": "1.0.0",
+  "description": "MCP server for Dataviz API — query data, manage dashboards, extract sources",
+  "type": "module",
+  "main": "index.js",
+  "bin": {
+    "dataviz-mcp": "./index.js"
+  },
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "dotenv": "^16.4.0"
+  }
+}

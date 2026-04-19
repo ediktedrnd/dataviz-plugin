@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "dataviz_query",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo 'Reminder: filter WHERE class != OTHER to exclude test data' >&2"
+          }
+        ]
+      }
+    ]
+  }
+}

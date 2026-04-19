@@ -1,0 +1,14 @@
+{
+  "name": "edikted",
+  "owner": {
+    "name": "Edikted Data Team",
+    "email": "assaf@edikted.com"
+  },
+  "plugins": [
+    {
+      "name": "dataviz-toolkit",
+      "source": "./",
+      "description": "Edikted Dataviz platform tools — create dashboards, query data, refresh sources, deploy reports"
+    }
+  ]
+}
