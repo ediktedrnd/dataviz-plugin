@@ -10,14 +10,30 @@
  *
  * Claude never sees the password — only this module touches it.
  */
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 const CREDENTIALS_PATH = join(homedir(), '.config', 'dataviz', 'credentials.json');
 const DEFAULT_URL = 'https://dataviz.edikted.tech';
-const SETUP_HINT =
-  'Run the `dataviz-setup` skill (ask Claude: "setup dataviz credentials") to create it.';
+const TEMPLATE = {
+  url: DEFAULT_URL,
+  email: 'your-email@edikted.com',
+  password: 'YOUR_PASSWORD',
+};
+
+function ensureTemplate() {
+  if (existsSync(CREDENTIALS_PATH)) return false;
+  try {
+    mkdirSync(dirname(CREDENTIALS_PATH), { recursive: true });
+    writeFileSync(CREDENTIALS_PATH, JSON.stringify(TEMPLATE, null, 2) + '\n', { mode: 0o600 });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+const SETUP_HINT = `Open ${CREDENTIALS_PATH} and replace "email" and "password" with your Dataviz login.`;
 
 let cachedToken = null;
 let tokenExpiry = 0;
@@ -27,7 +43,10 @@ function loadFromFile() {
   try {
     const raw = readFileSync(CREDENTIALS_PATH, 'utf8');
     const json = JSON.parse(raw);
-    if (json.email && json.password) {
+    if (
+      json.email && json.password &&
+      json.email !== TEMPLATE.email && json.password !== TEMPLATE.password
+    ) {
       return {
         url: (json.url || process.env.DATAVIZ_URL || DEFAULT_URL).replace(/\/$/, ''),
         email: json.email,
@@ -59,9 +78,11 @@ function getConfig() {
   if (cachedConfig) return cachedConfig;
   const config = loadFromFile() || loadFromEnv();
   if (!config) {
-    throw new Error(
-      `No Dataviz credentials found at ${CREDENTIALS_PATH} and no DATAVIZ_EMAIL/DATAVIZ_PASSWORD env vars set. ${SETUP_HINT}`,
-    );
+    const created = ensureTemplate();
+    const prefix = created
+      ? `Created a credentials template at ${CREDENTIALS_PATH}.`
+      : `No Dataviz credentials found at ${CREDENTIALS_PATH}.`;
+    throw new Error(`${prefix} ${SETUP_HINT}`);
   }
   cachedConfig = config;
   return config;
@@ -84,7 +105,7 @@ export async function getToken() {
     const status = res.status;
     let hint = '';
     if (status === 401) {
-      hint = ` Your credentials may be wrong — re-run \`dataviz-setup\` to update them.`;
+      hint = ` Your credentials in ${CREDENTIALS_PATH} may be wrong — open the file and update "email" / "password".`;
     }
     throw new Error(`Dataviz login failed (${status}): ${err.error || 'Unknown error'}.${hint}`);
   }

@@ -2,6 +2,21 @@
 
 You have access to the Dataviz analytics platform via MCP tools. Use these tools to query data, manage dashboards, and deploy reports.
 
+## First-Time Setup (credentials)
+
+If any `dataviz_*` MCP tool fails with a message mentioning `~/.config/dataviz/credentials.json`, the user hasn't entered their Dataviz login yet. The MCP server auto-creates a template file on first failure. Your job:
+
+1. Tell the user — in one line — to open `~/.config/dataviz/credentials.json` and replace the `email` and `password` fields with their Dataviz credentials (same ones used at https://dataviz.edikted.tech).
+2. Wait for them to confirm, then retry the tool call.
+
+Do **not**:
+- Ask them to run a setup skill, installer, or command
+- Read or write to the credentials file yourself
+- Request credentials in chat
+
+Example response when creds are missing:
+> Open `~/.config/dataviz/credentials.json`, replace the `email` and `password` with your Dataviz login, save, and tell me when done. I'll retry from here.
+
 ## Available Tools (via MCP)
 - `dataviz_query` — Run SQL on DuckDB
 - `dataviz_list_tables` / `dataviz_describe_table` — Explore table schemas
