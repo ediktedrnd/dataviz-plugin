@@ -2,7 +2,9 @@
  * Auth module — handles login, token caching, and auto-refresh.
  *
  * Credentials resolution (first match wins):
- *   1. ~/.config/dataviz/credentials.json  (standard per-user config)
+ *   1. Per-user credentials file (see credentialsPath below)
+ *       - Windows: %APPDATA%\dataviz\credentials.json
+ *       - macOS / Linux: ~/.config/dataviz/credentials.json
  *   2. DATAVIZ_EMAIL + DATAVIZ_PASSWORD env vars (dev / override)
  *
  * The URL is taken from the credentials file, else from DATAVIZ_URL env,
@@ -11,10 +13,18 @@
  * Claude never sees the password — only this module touches it.
  */
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { homedir, platform } from 'node:os';
 import { dirname, join } from 'node:path';
 
-const CREDENTIALS_PATH = join(homedir(), '.config', 'dataviz', 'credentials.json');
+function credentialsPath() {
+  if (platform() === 'win32') {
+    const base = process.env.APPDATA || join(homedir(), 'AppData', 'Roaming');
+    return join(base, 'dataviz', 'credentials.json');
+  }
+  return join(homedir(), '.config', 'dataviz', 'credentials.json');
+}
+
+const CREDENTIALS_PATH = credentialsPath();
 const DEFAULT_URL = 'https://dataviz.edikted.tech';
 const TEMPLATE = {
   url: DEFAULT_URL,

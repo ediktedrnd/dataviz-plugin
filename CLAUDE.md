@@ -4,18 +4,24 @@ You have access to the Dataviz analytics platform via MCP tools. Use these tools
 
 ## First-Time Setup (credentials)
 
-If any `dataviz_*` MCP tool fails with a message mentioning `~/.config/dataviz/credentials.json`, the user hasn't entered their Dataviz login yet. The MCP server auto-creates a template file on first failure. Your job:
+If any `dataviz_*` MCP tool fails with a message mentioning a `credentials.json` file, the user hasn't entered their Dataviz login yet. The MCP server auto-creates a template file on first failure at an OS-specific path:
 
-1. Tell the user — in one line — to open `~/.config/dataviz/credentials.json` and replace the `email` and `password` fields with their Dataviz credentials (same ones used at https://dataviz.edikted.tech).
+- **Windows:** `%APPDATA%\dataviz\credentials.json` (e.g. `C:\Users\<name>\AppData\Roaming\dataviz\credentials.json`)
+- **macOS / Linux:** `~/.config/dataviz/credentials.json`
+
+Your job:
+
+1. Copy the **exact absolute path** that appears in the error message and tell the user — in one line — to open that file and replace the `email` and `password` fields with their Dataviz credentials (same ones used at https://dataviz.edikted.tech).
 2. Wait for them to confirm, then retry the tool call.
 
 Do **not**:
+- Invent a path or rewrite the one in the error (especially no `~/` shorthand for Windows users — use the literal path the error returned)
 - Ask them to run a setup skill, installer, or command
 - Read or write to the credentials file yourself
 - Request credentials in chat
 
-Example response when creds are missing:
-> Open `~/.config/dataviz/credentials.json`, replace the `email` and `password` with your Dataviz login, save, and tell me when done. I'll retry from here.
+Example response when creds are missing (substitute `<PATH>` with the exact path from the error):
+> Open `<PATH>`, replace the `email` and `password` with your Dataviz login, save, and tell me when done. I'll retry from here.
 
 ## Available Tools (via MCP)
 - `dataviz_query` — Run SQL on DuckDB
