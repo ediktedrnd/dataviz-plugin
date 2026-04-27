@@ -7,10 +7,7 @@
   "plugins": [
     {
       "name": "dataviz-toolkit",
-      "source": {
-        "source": "github",
-        "repo": "ediktedrnd/dataviz-plugin"
-      },
+      "source": "./",
       "description": "Edikted Dataviz platform tools — create dashboards, query data, refresh sources, deploy reports"
     }
   ]
