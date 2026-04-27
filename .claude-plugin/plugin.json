@@ -1,5 +1,6 @@
 {
   "name": "dataviz-toolkit",
+  "version": "1.0.0",
   "description": "Edikted Dataviz platform tools — create dashboards, query data, refresh sources, deploy reports, send PDF emails",
   "author": {
     "name": "Edikted Data Team",

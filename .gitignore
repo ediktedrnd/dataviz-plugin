@@ -5,4 +5,5 @@ node_modules/
 *.log
 mcpb/build/
 mcpb/dist/*.mcpb
+.vscode
 
