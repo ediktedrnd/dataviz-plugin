@@ -47,6 +47,79 @@ Quarterly cohort analysis. Columns:
 
 Suffixes: `_d0` (day 0), `_d90`, `_d180`, `_d270`, `_d360`, `_d540`, `_d720`, `_d900`, `_d1080`
 
+## Retail / Replenishment Domain (PostgreSQL — Edikted Production)
+
+These tables live in the same PostgreSQL connection as the sales aggregations. They power retail (physical store) inventory + replenishment workflows. Wire them in as `published` data sources via `Sources → Add PostgreSQL` or query them ad-hoc through an extract.
+
+### `public.style_colors`
+Catalog parent — one row per **style-color** (a product variant before sizing). The PK that every product, sku, and aggregation hangs off.
+
+| Column | Notes |
+|---|---|
+| `id` | PK — used as FK target everywhere |
+| `style_color` | Display key, e.g. `RED-001` |
+| `style` | Style code (without color) |
+| `published` | Boolean — true if customer-facing |
+| `rrp` | Recommended retail price |
+| `status` | Lifecycle (active / archived / etc.) |
+| `collection`, `group`, `item_type` | Merchandising hierarchy |
+| `product_image` | URL |
+
+### `public.skus`
+SKU = `(style_color × size)`. Bridge between catalog and inventory/sales.
+
+| Column | Notes |
+|---|---|
+| `sku` | PK |
+| `size` | e.g. XS/S/M/L |
+| `style_color` | FK → `style_colors.id` |
+| `weight` | Shipping weight |
+
+### `public.replen_statuses`
+Lookup for per-store-style-color replenishment status (`Active`, `Paused`, `Archived`, …). Joined via `store_style_colors.replen_status`.
+
+| Column | Notes |
+|---|---|
+| `id` | PK |
+| `status` | Display label |
+| `archive` | Boolean — hide from operational UIs |
+
+### `public.store_skus_replenishment` (view)
+The **heart of retail replenishment planning** — one row per `(store, sku)`. Aggregates sales velocity, on-hand and warehouse inventory, OTW, and the recommended replen quantity.
+
+| Column | Notes |
+|---|---|
+| `store`, `sku` | Composite key |
+| `inventory` | On-hand at store |
+| `wh_inv` | Warehouse inventory |
+| `sales_7d`, `sales_30d`, `virtual_7d` | Sales velocity windows |
+| `otw` | On-the-way (in-transit) units |
+| `recom_replen` | Recommended replen quantity |
+| `inventory_days` | Cover (days of supply) |
+| `sales_level` | Tier label |
+| `web_7d` | Web-channel sales over the last 7 days |
+| `base_replen`, `sales_replen` | Components of the replenishment formula |
+
+### `edktd_history.daily_sales` (filter `o_type LIKE 'RETAIL-%'`)
+Daily sales aggregation per `(date, store, sku)`. Maintained by Lambda `daily-sales-process` (DELETE + INSERT per date, idempotent re-runs supported). The `RETAIL-*` filter scopes to physical-store sales (LAGROVE / MNMOA / NYCSOHO / CAIRVINE / CAAMERICANA).
+
+| Column | Notes |
+|---|---|
+| `order_date` | DATE |
+| `store` | Store code |
+| `sku` | FK → `skus.sku` |
+| `style_color` | FK → `style_colors.id` |
+| `o_type` | Order type — filter `LIKE 'RETAIL-%'` for stores |
+| `ordered_qty` | Units sold |
+| `gross_revenue` | Pre-discount revenue |
+| `full_retail_price` | RRP × qty |
+| `total_inv` | Inventory snapshot for that day |
+
+**Common joins:**
+- `daily_sales JOIN skus USING (sku)` — get size + style_color
+- `skus JOIN style_colors ON skus.style_color = style_colors.id` — get RRP, collection
+- `store_skus_replenishment JOIN skus USING (sku)` — replen view + sku metadata
+
 ## Data Architecture
 - **PostgreSQL** (RDS) = source of truth, updated by dbt
 - **DuckDB** = analytics engine, loaded from PostgreSQL via extract pipeline

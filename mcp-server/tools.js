@@ -2,7 +2,7 @@
  * Tool definitions and handlers for the Dataviz MCP server.
  * Each tool wraps a Dataviz API call and returns structured results.
  */
-import { apiJson, apiFetch, getBaseUrl } from './auth.js';
+import { apiJson, apiFetch, getBaseUrl, getToken } from './auth.js';
 
 // ── Tool Definitions (JSON Schema) ─────────────────────────────
 
@@ -57,26 +57,29 @@ export const TOOLS = [
   },
   {
     name: 'dataviz_create_dashboard',
-    description: 'Create a new canvas dashboard with title, description, and optional widgets.',
+    description: 'Create a new canvas dashboard with title, description, and optional business context. business_context_md is REQUIRED and should describe what the dashboard answers, who its audience is, key KPIs/columns, source tables, and any caveats.',
     inputSchema: {
       type: 'object',
       properties: {
         title: { type: 'string', description: 'Dashboard title' },
-        description: { type: 'string', description: 'Dashboard description' },
+        description: { type: 'string', description: 'Short one-line dashboard description' },
+        business_context_md: { type: 'string', description: 'Markdown describing the business context: what question the dashboard answers, who it serves, KPI definitions, source tables/queries used, and caveats. This persists with the dashboard so future agents can read it before editing.' },
       },
-      required: ['title'],
+      required: ['title', 'business_context_md'],
     },
   },
   {
     name: 'dataviz_save_dashboard',
-    description: 'Save/update a dashboard. Sends the full payload (widgets, filters, tabs, calculatedFields, columnAliases). Uses chunked upload to bypass WAF limits.',
+    description: 'Save/update a dashboard. Sends the full payload (widgets, mobile_widgets, filters, tabs, calculatedFields, columnAliases, business_context_md). Uses chunked upload to bypass WAF limits. Whenever you change a dashboard\'s structure or queries, also update business_context_md so it never goes stale.',
     inputSchema: {
       type: 'object',
       properties: {
         dashboard_id: { type: 'number', description: 'Dashboard ID to update' },
         title: { type: 'string', description: 'Dashboard title' },
         description: { type: 'string', description: 'Dashboard description' },
-        widgets: { type: 'array', description: 'Array of widget objects' },
+        business_context_md: { type: 'string', description: 'Markdown describing the business context. Update whenever the dashboard\'s purpose, KPIs, or sources change.' },
+        widgets: { type: 'array', description: 'Array of widget objects (desktop layout)' },
+        mobile_widgets: { type: 'array', description: 'Optional mobile layout overlay. Each entry: {id, x, y, w, h}. Widget id must exist in widgets[]. If omitted, client auto-generates from desktop on render.' },
         globalFilters: { type: 'object', description: 'Global filter configuration' },
         relationships: { type: 'array', description: 'Table relationships' },
         tabs: { type: 'array', description: 'Tab names' },
@@ -113,6 +116,19 @@ export const TOOLS = [
     inputSchema: { type: 'object', properties: {} },
   },
   {
+    name: 'dataviz_upload_csv',
+    description: 'Upload a CSV or TSV file as a first-class data source. Creates a DuckDB table "query_{id}_{name}" that can be joined with any other table via the Relations UI. Use this for analyst-supplied config data (A/B maps, price tiers, static dimension lookups, seed lists, etc). Up to 100MB, 500 columns, 10M rows. Prefer this over INSERT/VALUES SQL — those hit an 8KB request body cap.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Display name for the source; also used as the DuckDB table suffix.' },
+        file_path: { type: 'string', description: 'Absolute path to the CSV or TSV file on disk. The tool reads + POSTs it as multipart/form-data.' },
+        replace_source_id: { type: 'number', description: 'Optional. When set, replaces an existing CSV source with this id (keeps table name, flushes cache).' },
+      },
+      required: ['name', 'file_path'],
+    },
+  },
+  {
     name: 'dataviz_upload_report',
     description: 'Upload or update a dynamic JSX report. The report is compiled server-side and served at /report/{slug}. Uses chunked upload for large files.',
     inputSchema: {
@@ -137,6 +153,9 @@ export const TOOLS = [
         to: { type: 'array', items: { type: 'string' }, description: 'Array of email addresses' },
         subject: { type: 'string', description: 'Optional email subject' },
         message: { type: 'string', description: 'Optional email body message' },
+        tabs: { type: 'string', description: 'Comma-separated tabs for multi-page reports (e.g. "performance,daily,weekly,monthly"). Report-slug only.' },
+        auto_dates: { type: 'boolean', description: 'When true, apply tab-aware default date ranges (performance=yesterday, daily=30D, weekly=12W, monthly=4M). Report-slug only.' },
+        fit: { type: 'string', description: '"page" fits each tab to one A4 landscape page (Tableau-style). Default "auto".' },
       },
       required: ['to'],
     },
@@ -222,6 +241,7 @@ export async function handleTool(name, args) {
         id: data.id,
         title: data.title,
         description: data.description,
+        business_context_md: data.business_context_md || null,
         widgets: (data.widgets || []).length,
         tabs: data.tabs || [],
         calculatedFields: data.calculatedFields || {},
@@ -231,11 +251,15 @@ export async function handleTool(name, args) {
     }
 
     case 'dataviz_create_dashboard': {
+      if (!args.business_context_md || !String(args.business_context_md).trim()) {
+        throw new Error('business_context_md is required. Describe the dashboard purpose, audience, KPIs, source tables, and caveats in markdown so future agents understand the context.');
+      }
       const data = await apiJson('/api/dashboard-canvas', {
         method: 'POST',
         body: JSON.stringify({
           title: args.title,
           description: args.description || '',
+          business_context_md: args.business_context_md,
         }),
       });
       const id = data.dashboard?.id || data.id;
@@ -282,6 +306,93 @@ export async function handleTool(name, args) {
       ).join('\n') || 'No sources';
     }
 
+    case 'dataviz_upload_csv': {
+      const { readFile } = await import('node:fs/promises');
+      const { basename } = await import('node:path');
+      if (!args.file_path) throw new Error('file_path is required');
+      if (!args.name) throw new Error('name is required');
+      const buf = await readFile(args.file_path);
+      const filename = basename(args.file_path);
+
+      // ALB/WAF caps bodies at ~8 KB regardless of Content-Type. For anything
+      // bigger than a few rows, chunk the file as base64 JSON POSTs (each
+      // chunk ≤ ~5 KB raw / ~6.7 KB base64 → enclosing JSON body safely under
+      // the WAF threshold). Tiny files still use the one-shot multipart path.
+      const MULTIPART_SAFE_LIMIT = 4000; // bytes — stay well below 8 KB cap
+
+      if (buf.length <= MULTIPART_SAFE_LIMIT) {
+        const mime = filename.toLowerCase().endsWith('.tsv') ? 'text/tab-separated-values' : 'text/csv';
+        const form = new FormData();
+        form.append('name', args.name);
+        form.append('file', new Blob([buf], { type: mime }), filename);
+        const path = args.replace_source_id
+          ? `/api/sources/csv/${args.replace_source_id}/replace`
+          : '/api/sources/csv';
+        const token = await getToken();
+        const res = await fetch(`${getBaseUrl()}${path}`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}` },
+          body: form,
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(`CSV upload failed (${res.status}): ${data.error || 'unknown'}${data.details ? ' — ' + data.details : ''}`);
+        const src = data.source || {};
+        const cols = (data.columns || []).map(c => `${c.name}:${c.type}`).join(', ');
+        return `CSV source ${args.replace_source_id ? 'replaced' : 'uploaded'}: id=${src.id}, table_name="${data.table_name}", rows=${data.row_count}, cols=${(data.columns||[]).length}\nColumns: ${cols}\nJoin via Relations UI, or query directly: SELECT * FROM "${data.table_name}" LIMIT 10`;
+      }
+
+      // Chunked path — parallel workers for speed
+      const b64 = buf.toString('base64');
+      const CHUNK_SIZE = 5000; // ~5 KB b64 per chunk
+      const totalParts = Math.ceil(b64.length / CHUNK_SIZE);
+      const CONCURRENCY = 6; // 6 parallel workers — ~6× faster than sequential
+
+      const initBody = { name: args.name, filename, total_parts: totalParts };
+      if (args.replace_source_id) initBody.replace_source_id = args.replace_source_id;
+      const init = await apiJson('/api/sources/csv/chunk/init', {
+        method: 'POST',
+        body: JSON.stringify(initBody),
+      });
+      const uploadId = init.upload_id;
+
+      // Worker pool
+      let nextIdx = 0;
+      let failed = null;
+      const sendOne = async (idx) => {
+        const chunk = b64.slice(idx * CHUNK_SIZE, (idx + 1) * CHUNK_SIZE);
+        const maxRetry = 3;
+        for (let attempt = 1; attempt <= maxRetry; attempt++) {
+          try {
+            await apiJson('/api/sources/csv/chunk', {
+              method: 'POST',
+              body: JSON.stringify({ upload_id: uploadId, part: idx + 1, chunk }),
+            });
+            return;
+          } catch (e) {
+            if (attempt === maxRetry) throw e;
+            await new Promise(r => setTimeout(r, 500 * attempt));
+          }
+        }
+      };
+      const worker = async () => {
+        while (!failed) {
+          const idx = nextIdx++;
+          if (idx >= totalParts) return;
+          try { await sendOne(idx); } catch (e) { failed = e; return; }
+        }
+      };
+      await Promise.all(Array.from({ length: CONCURRENCY }, worker));
+      if (failed) throw new Error(`Chunk upload failed: ${failed.message}`);
+
+      const data = await apiJson('/api/sources/csv/chunk/complete', {
+        method: 'POST',
+        body: JSON.stringify({ upload_id: uploadId }),
+      });
+      const src = data.source || {};
+      const cols = (data.columns || []).map(c => `${c.name}:${c.type}`).join(', ');
+      return `CSV source ${args.replace_source_id ? 'replaced' : 'uploaded'} (chunked, ${totalParts} parts × ${CONCURRENCY} workers): id=${src.id}, table_name="${data.table_name}", rows=${data.row_count}, cols=${(data.columns||[]).length}\nColumns: ${cols}\nJoin via Relations UI, or query directly: SELECT * FROM "${data.table_name}" LIMIT 10`;
+    }
+
     case 'dataviz_upload_report': {
       const data = await chunkedUploadReport(
         args.slug,
@@ -303,6 +414,9 @@ export async function handleTool(name, args) {
       if (args.report_slug) body.reportSlug = args.report_slug;
       if (args.subject) body.subject = args.subject;
       if (args.message) body.message = args.message;
+      if (args.tabs) body.tabs = args.tabs;
+      if (args.auto_dates) body.autoDates = true;
+      if (args.fit) body.fit = args.fit;
 
       const data = await apiJson('/api/reports/send-email', {
         method: 'POST',
