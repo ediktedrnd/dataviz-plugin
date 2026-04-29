@@ -2,9 +2,9 @@
   "dxt_version": "0.1",
   "name": "dataviz-toolkit",
   "display_name": "Dataviz Toolkit",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Edikted Dataviz platform tools — query data, manage dashboards, refresh sources, deploy reports",
-  "long_description": "Provides MCP tools for the Edikted Dataviz platform: list/describe tables, run SQL against DuckDB, list/create/save canvas dashboards, trigger extracts, upload dynamic reports, send PDF reports via email. On first run the server prompts for per-user credentials (stored locally, never in chat).",
+  "long_description": "Provides MCP tools for the Edikted Dataviz platform: list/describe tables, run SQL against DuckDB, list/create/save canvas dashboards, trigger extracts, upload dynamic reports, send PDF reports via email. Credentials are collected at install time via Cowork's user_config prompt (stored securely by the host) and passed to the server as environment variables — never written to disk by the plugin and never exposed in chat.",
   "author": {
     "name": "Edikted Data Team",
     "email": "assaf@edikted.com"
@@ -22,8 +22,25 @@
       "command": "node",
       "args": ["${__dirname}/server/index.js"],
       "env": {
-        "DATAVIZ_URL": "https://dataviz.edikted.tech"
+        "DATAVIZ_URL": "https://dataviz.edikted.tech",
+        "DATAVIZ_EMAIL": "${user_config.email}",
+        "DATAVIZ_PASSWORD": "${user_config.password}"
       }
+    }
+  },
+  "user_config": {
+    "email": {
+      "type": "string",
+      "title": "Dataviz email",
+      "description": "Your Edikted Dataviz login (same one you use at https://dataviz.edikted.tech)",
+      "required": true
+    },
+    "password": {
+      "type": "string",
+      "title": "Dataviz password",
+      "description": "Your Dataviz account password",
+      "sensitive": true,
+      "required": true
     }
   }
 }

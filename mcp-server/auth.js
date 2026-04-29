@@ -86,7 +86,10 @@ function loadFromEnv() {
 
 function getConfig() {
   if (cachedConfig) return cachedConfig;
-  const config = loadFromFile() || loadFromEnv();
+  // Env vars take precedence so Cowork's user_config injection wins.
+  // Falls back to the per-user credentials file for Claude Code (which
+  // does not substitute ${user_config.*} placeholders).
+  const config = loadFromEnv() || loadFromFile();
   if (!config) {
     const created = ensureTemplate();
     const prefix = created
