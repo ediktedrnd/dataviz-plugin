@@ -7,7 +7,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
 BUILD="$HERE/build"
 DIST="$HERE/dist"
-VERSION="$(node -p "require('$HERE/manifest.json').version")"
+VERSION="$(cd "$HERE" && node -p "require('./manifest.json').version")"
 OUT="$DIST/dataviz-toolkit-$VERSION.mcpb"
 
 rm -rf "$BUILD"
