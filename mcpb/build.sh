@@ -24,6 +24,17 @@ echo "[mcpb] installing production deps…"
 
 echo "[mcpb] zipping → $OUT"
 rm -f "$OUT"
-(cd "$BUILD" && zip -rq "$OUT" manifest.json server)
+if command -v zip >/dev/null 2>&1; then
+  (cd "$BUILD" && zip -rq "$OUT" manifest.json server)
+elif command -v powershell.exe >/dev/null 2>&1; then
+  # Windows fallback when `zip` is not installed in Git Bash / WSL.
+  WIN_BUILD="$(cygpath -w "$BUILD")"
+  WIN_OUT="$(cygpath -w "$OUT")"
+  powershell.exe -NoProfile -Command \
+    "Add-Type -AssemblyName System.IO.Compression.FileSystem; [System.IO.Compression.ZipFile]::CreateFromDirectory('$WIN_BUILD', '$WIN_OUT')"
+else
+  echo "[mcpb] no zip tool available — install \`zip\` or run on a host with powershell.exe" >&2
+  exit 1
+fi
 
 echo "[mcpb] built: $OUT ($(du -h "$OUT" | cut -f1))"
