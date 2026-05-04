@@ -200,6 +200,12 @@ Use `dataviz_list_tables` to get the current list. Known tables as of this writi
 | `query_7_New_Orders_AOV` | Orders for AOV: `date`, `destination`, `o_type`, `class`, `country`, `record_count`, `total_revenue` |
 | `query_8_Products` | Product-level line items: `ny_date`, `destination`, `o_type`, `product_name`, `product_type`, `product_collection`, `sku`, `color`, `size`, `qty_ordered`, `retail_price`, `full_retail_price`, `gross_revenue`, `unit_cost_usd`, `gross_margin`, `country`, `state`, `city` |
 | `query_11_Q_Cohorts_Online` | Quarterly cohort analysis: `cohort_q`, `first_order_o_type`, `customers`, + retention/revenue at d0/d90/d180/d270/d360/d540/d720/d900/d1080 |
+| `query_117_style_colors` | Master catalog (style+color level): `id`, `style_color`, `style`, `color`, `item_type`, `collection`, `fabric_type`, `fabric`, `rrp`, `published`, `drop_date`, `status`, `allow_rep`, `gross_weight`, `dim_weight`, `custom_category`, `no_drop` |
+| `query_118_skus` | Master SKU (one row per SKU): `sku`, `size`, `weight`, `style_color`, `created_at`, `updated_at` |
+| `query_119_virtual_7d` | Raw last-7d sales per store × style_color × sku × order_date: `store`, `style_color`, `sku`, `sales_qty`, `inventory_quantity`, `order_date` |
+| `query_122_mart_repeats__wide_overview` | Repeat snapshot at style_color level — sales (1D/7D/30D/All), inventory ("total inv", "Inv Days", "Balance + OTW"), discounts, BOM/BIS, OTW per distributor, supplier. Quoted column names |
+| `query_123_mart_repeats__wide_sku` | Repeat snapshot at SKU level — `destination`, `Size`, sales windows (`30D_sales`, `90D_sales`, `V7D_sales`, `All_sales`) + percent-of-style splits, inventory share, `production_days`, `Supplier`, `Style Color` |
+| `query_124_n7d` | 7d/30d sales normalized to distributor totals (WEB only): `distributor`, `style_color`, `sku`, `sku_sales_7d`, `sku_sales_30d`, `total_sold_last_7d`, `total_sold_last_30d`, `normv7d`, `normv30d` |
 
 ---
 
