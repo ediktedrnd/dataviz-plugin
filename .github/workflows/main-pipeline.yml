@@ -16,15 +16,19 @@ on:
       - main
       - EKD-3518-iac-for-dataviz-plugin-mcp
     paths:
+      # Server code + Dockerfile (under mcp-server/)
       - 'mcp-server/**'
+      # Plugin assets baked into the image (skills.js / resources.js read these at startup)
+      - 'skills/**'
+      - 'context/**'
+      # Build context / CI definitions
+      - '.dockerignore'
       - '.github/workflows/**'
   workflow_dispatch: {}
 
 permissions:
   id-token: write
   contents: read
-  issues: write
-  actions: read
 
 jobs:
   setup:
