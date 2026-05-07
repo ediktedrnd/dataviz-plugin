@@ -1,0 +1,47 @@
+# Local-test compose — standalone MCP server (no Dataviz backend).
+#
+# For FULL end-to-end testing (real OAuth flow, real tool calls), use the
+# dev's Dataviz repo's compose instead — it already includes mcp-server
+# as a service alongside postgres/redis/backend:
+#
+#   cd ../Dataviz && docker compose up
+#
+# This file is for testing the MCP server in isolation with self-minted
+# tokens. Tool calls will 401 against upstream; everything else works.
+#
+# Usage:
+#   cp mcp-server/.env.example .env     # first time only
+#   docker compose up --build           # build + run on :3000
+#   docker compose logs -f mcp-server
+#   docker compose run --rm mcp-server \
+#     node scripts/mint-test-token.mjs  # mint a token for curl tests
+#   docker compose down
+
+services:
+  mcp-server:
+    build:
+      context: .
+      dockerfile: mcp-server/Dockerfile
+    image: dataviz-mcp:local
+    container_name: dataviz-mcp
+    restart: unless-stopped
+    environment:
+      PORT: 3000
+      NODE_ENV: ${NODE_ENV:-development}
+      OAUTH_ISSUER: ${OAUTH_ISSUER:-https://dataviz.test.local}
+      MCP_RESOURCE: ${MCP_RESOURCE:-http://localhost:3000/mcp}
+      MCP_PUBLIC_URL: ${MCP_PUBLIC_URL:-http://localhost:3000}
+      MCP_ALLOWED_ORIGINS: ${MCP_ALLOWED_ORIGINS:-}
+      MCP_ACCESS_TOKEN_SECRET: ${MCP_ACCESS_TOKEN_SECRET}
+      DATAVIZ_URL: ${DATAVIZ_URL:-https://dataviz.edikted.tech}
+    # Host port can be remapped via HOST_PORT in .env to avoid conflicts
+    # with the dev's Dataviz compose (which also uses :3000). Container
+    # always listens on 3000 internally; remap only the host side.
+    ports:
+      - "${HOST_PORT:-3000}:3000"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:3000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s

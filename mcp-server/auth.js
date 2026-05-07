@@ -1,20 +1,25 @@
 /**
- * Auth module — handles login, token caching, and auto-refresh.
+ * Auth module — produces the bearer token for outbound Dataviz API calls
+ * and forwards audit headers when running under a remote MCP request.
  *
- * Credentials resolution (first match wins):
- *   1. Per-user credentials file (see credentialsPath below)
- *       - Windows: %APPDATA%\dataviz\credentials.json
- *       - macOS / Linux: ~/.config/dataviz/credentials.json
- *   2. DATAVIZ_EMAIL + DATAVIZ_PASSWORD env vars (dev / override)
+ * Two modes:
  *
- * The URL is taken from the credentials file, else from DATAVIZ_URL env,
- * else defaults to production.
+ *   1. HTTP transport (ECS, http.js): a per-request AsyncLocalStorage
+ *      context carries the user's MCP access token. We forward it to
+ *      Dataviz as-is — Dataviz's middleware accepts MCP tokens alongside
+ *      legacy web JWTs.
+ *
+ *   2. Stdio transport (local Claude Code, index.js): no context. We
+ *      fall back to the credentials.json / DATAVIZ_EMAIL+PASSWORD login
+ *      flow that's been here since day one. Token is cached in-memory
+ *      for ~23h and refreshed by re-login.
  *
  * Claude never sees the password — only this module touches it.
  */
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { homedir, platform } from 'node:os';
 import { dirname, join } from 'node:path';
+import { getRequestContext } from './context.js';
 
 function credentialsPath() {
   if (platform() === 'win32') {
@@ -84,7 +89,7 @@ function loadFromEnv() {
   return null;
 }
 
-function getConfig() {
+function getStdioConfig() {
   if (cachedConfig) return cachedConfig;
   // Env vars take precedence so Cowork's user_config injection wins.
   // Falls back to the per-user credentials file for Claude Code (which
@@ -101,18 +106,16 @@ function getConfig() {
   return config;
 }
 
-export async function getToken() {
+async function loginWithStoredCreds() {
   if (cachedToken && Date.now() < tokenExpiry - 300_000) {
     return cachedToken;
   }
-
-  const { url, email, password } = getConfig();
+  const { url, email, password } = getStdioConfig();
   const res = await fetch(`${url}/api/auth/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ email, password }),
   });
-
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     const status = res.status;
@@ -122,24 +125,54 @@ export async function getToken() {
     }
     throw new Error(`Dataviz login failed (${status}): ${err.error || 'Unknown error'}.${hint}`);
   }
-
   const data = await res.json();
   cachedToken = data.token;
   tokenExpiry = Date.now() + 23 * 60 * 60 * 1000;
   return cachedToken;
 }
 
+/**
+ * Returns the bearer token to use for outbound Dataviz API calls.
+ *
+ *   HTTP path: token from per-request context (the user's MCP access token).
+ *   Stdio path: cached login token from credentials.json / env vars.
+ */
+export async function getToken() {
+  const ctx = getRequestContext();
+  if (ctx?.token) return ctx.token;
+  return loginWithStoredCreds();
+}
+
+/**
+ * Returns the upstream Dataviz base URL.
+ *
+ *   HTTP path: DATAVIZ_URL env (set by the ECS task definition).
+ *   Stdio path: from credentials.json / DATAVIZ_URL env / default.
+ */
+export function getBaseUrl() {
+  const ctx = getRequestContext();
+  if (ctx) {
+    return (process.env.DATAVIZ_URL || DEFAULT_URL).replace(/\/$/, '');
+  }
+  return getStdioConfig().url;
+}
+
 export async function apiFetch(path, options = {}) {
-  const { url } = getConfig();
+  const url = getBaseUrl();
   const token = await getToken();
-  const res = await fetch(`${url}${path}`, {
-    ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${token}`,
-      ...options.headers,
-    },
-  });
+  const ctx = getRequestContext();
+
+  const headers = {
+    'Content-Type': 'application/json',
+    Authorization: `Bearer ${token}`,
+    ...options.headers,
+  };
+
+  // Audit headers — Dataviz's auditLogger.logAudit() reads these.
+  if (ctx?.toolName) headers['X-Dataviz-MCP-Tool'] = ctx.toolName;
+  if (ctx?.requestId) headers['X-Request-Id'] = ctx.requestId;
+
+  const res = await fetch(`${url}${path}`, { ...options, headers });
   return res;
 }
 
@@ -150,8 +183,4 @@ export async function apiJson(path, options = {}) {
     throw new Error(`API error ${res.status} on ${path}: ${data.error || JSON.stringify(data)}`);
   }
   return data;
-}
-
-export function getBaseUrl() {
-  return getConfig().url;
 }
