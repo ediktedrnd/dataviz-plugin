@@ -1,0 +1,85 @@
+# Reusable: render a new task definition revision with the supplied image
+# URI and roll the ECS service. Mirrors the Dataviz repo's deploy-ecs.yml.
+name: ECS deployment
+
+on:
+  workflow_call:
+    inputs:
+      aws-region:
+        description: "AWS region"
+        required: false
+        type: string
+        default: "us-east-1"
+      environment:
+        description: "Target environment"
+        required: true
+        type: string
+      ecs-cluster:
+        description: "ECS cluster name"
+        required: true
+        type: string
+      ecs-service:
+        description: "ECS service name"
+        required: true
+        type: string
+      task-definition-family:
+        description: "ECS task definition family (Terraform-managed); downloaded from AWS at deploy time"
+        required: true
+        type: string
+      container-name:
+        description: "Container name within the task definition to update"
+        required: true
+        type: string
+      image-uri:
+        description: "Full ECR image URI with SHA tag"
+        required: true
+        type: string
+      wait-for-stability:
+        description: "Block until ECS service is stable. Set true for production releases."
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  deploy-to-ecs:
+    name: Deploy ${{ inputs.container-name }} to ECS (${{ inputs.environment }})
+    runs-on: ubuntu-24.04-arm
+    environment: ${{ inputs.environment }}
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@8df5847569e6427dd6c4fb1cf565c83acfa8afa7 # v6.0.0
+        with:
+          role-to-assume: ${{ secrets.ECS_DEPLOY_ROLE_ARN }}
+          role-session-name: github-actions-${{ github.run_id }}-deploy
+          aws-region: ${{ inputs.aws-region }}
+
+      - name: Download current task definition
+        run: |
+          aws ecs describe-task-definition \
+            --task-definition ${{ inputs.task-definition-family }} \
+            --query taskDefinition \
+            | jq 'del(.taskDefinitionArn, .revision, .status, .requiresAttributes,
+                      .placementConstraints, .compatibilities, .registeredAt, .registeredBy)' \
+            > task-definition.json
+          echo "Downloaded task definition: ${{ inputs.task-definition-family }}"
+
+      - name: Render updated task definition
+        id: render
+        uses: aws-actions/amazon-ecs-render-task-definition@77954e213ba1f9f9cb016b86a1d4f6fcdea0d57e # v1.8.4
+        with:
+          task-definition: task-definition.json
+          container-name: ${{ inputs.container-name }}
+          image: ${{ inputs.image-uri }}
+
+      - name: Deploy to ECS
+        uses: aws-actions/amazon-ecs-deploy-task-definition@fc8fc60f3a60ffd500fcb13b209c59d221ac8c8c # v2
+        with:
+          task-definition: ${{ steps.render.outputs.task-definition }}
+          service: ${{ inputs.ecs-service }}
+          cluster: ${{ inputs.ecs-cluster }}
+          wait-for-service-stability: ${{ inputs.wait-for-stability }}
+          wait-for-minutes: 10

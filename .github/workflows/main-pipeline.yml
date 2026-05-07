@@ -1,0 +1,88 @@
+# dataviz-plugin Main Deployment Pipeline
+#
+# Triggers:
+#   push to main                                 → build → production
+#   push to EKD-3518-iac-for-dataviz-plugin-mcp  → build → production (testing branch)
+#   manual dispatch                              → build → production
+#
+# Single-environment pipeline: dataviz-mcp only deploys to production today.
+# Staging/integration tfvars carry empty {} blocks so no infra exists in those
+# accounts to deploy to. Add environment selector here if that changes.
+name: Main Deployment Pipeline
+
+on:
+  push:
+    branches:
+      - main
+      - EKD-3518-iac-for-dataviz-plugin-mcp
+    paths:
+      - 'mcp-server/**'
+      - '.github/workflows/**'
+  workflow_dispatch: {}
+
+permissions:
+  id-token: write
+  contents: read
+  issues: write
+  actions: read
+
+jobs:
+  setup:
+    name: Resolve Build Metadata
+    runs-on: ubuntu-24.04-arm
+    outputs:
+      short_sha: ${{ steps.meta.outputs.short_sha }}
+      environment: production
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Set image metadata
+        id: meta
+        run: echo "short_sha=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+
+  build:
+    name: Build dataviz-mcp
+    needs: setup
+    uses: ./.github/workflows/build-push-ecr.yml
+    with:
+      dockerfile: ./mcp-server/Dockerfile
+      ecr-repository: edikted-dataviz-mcp-backend
+      environment: ${{ needs.setup.outputs.environment }}
+      build-context: .
+      image-tag: ${{ needs.setup.outputs.short_sha }}
+    secrets:
+      ECR_ROLE_ARN: ${{ secrets.ECR_ROLE_ARN }}
+
+  deploy:
+    name: Deploy dataviz-mcp to ECS (production)
+    needs: [setup, build]
+    uses: ./.github/workflows/deploy-ecs.yml
+    with:
+      environment: ${{ needs.setup.outputs.environment }}
+      ecs-cluster: edikted-${{ needs.setup.outputs.environment }}
+      ecs-service: edikted-dataviz-mcp-backend-${{ needs.setup.outputs.environment }}
+      task-definition-family: edikted-dataviz-mcp-backend-${{ needs.setup.outputs.environment }}
+      container-name: dataviz-mcp-backend
+      image-uri: ${{ needs.build.outputs.image_uri }}
+      wait-for-stability: true
+    secrets: inherit
+
+  pipeline-summary:
+    name: Pipeline Summary
+    runs-on: ubuntu-24.04-arm
+    needs: [setup, build, deploy]
+    if: always()
+    steps:
+      - name: Summary
+        run: |
+          echo "## dataviz-mcp Deployment Pipeline" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Branch:** \`${{ github.ref_name }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Commit:** \`${{ needs.setup.outputs.short_sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Environment:** ${{ needs.setup.outputs.environment }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Stage | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Build & Push | ${{ needs.build.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Deploy | ${{ needs.deploy.result }} |" >> $GITHUB_STEP_SUMMARY

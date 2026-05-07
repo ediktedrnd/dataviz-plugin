@@ -129,11 +129,14 @@ async function handleMcpRequest(req, res) {
   try {
     payload = await verifyAccessToken(token);
   } catch (err) {
+    // Detailed reason logged server-side for ops; clients get a generic
+    // invalid_token to avoid leaking claim-mismatch details to attackers
+    // probing the public endpoint.
     console.error(`[dataviz-mcp] token rejected (${requestId}):`, err.message);
     res.setHeader('WWW-Authenticate', bearerChallengeHeader());
     return res.status(401).json({
       error: 'invalid_token',
-      error_description: err.message,
+      error_description: 'token is invalid or expired',
     });
   }
 
