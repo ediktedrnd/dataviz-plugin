@@ -1,9 +1,8 @@
 # dataviz-plugin Main Deployment Pipeline
 #
 # Triggers:
-#   push to main                                 → build → production
-#   push to EKD-3518-iac-for-dataviz-plugin-mcp  → build → production (testing branch)
-#   manual dispatch                              → build → production
+#   push to main      → build → production  (covers PR merges to main)
+#   manual dispatch   → build → production  (re-deploy without a new commit)
 #
 # Single-environment pipeline: dataviz-mcp only deploys to production today.
 # Staging/integration tfvars carry empty {} blocks so no infra exists in those
@@ -14,7 +13,6 @@ on:
   push:
     branches:
       - main
-      - EKD-3518-iac-for-dataviz-plugin-mcp
     paths:
       # Server code + Dockerfile (under mcp-server/)
       - 'mcp-server/**'
