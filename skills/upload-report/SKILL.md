@@ -44,6 +44,12 @@ Reports have automatic version history. Each upload saves the previous version. 
 - `GET /api/reports/{slug}/versions`
 - `POST /api/reports/{slug}/versions/{id}/restore`
 
+> **Dynamic-only.** This applies to reports uploaded via `dataviz_upload_report`. A handful of legacy reports (`edikted-orders`, `period-comparison`, `business-analytics`) are **static** — bundled into the frontend at `frontend/src/dashboards/*.jsx` and registered in `frontend/src/dashboards/index.js`. Static reports have no version history, no owner field, and no in-UI history button. Always upload new reports as dynamic.
+
+## Mobile views
+
+If the report needs a separate phone layout, ship a `MobileX` component alongside the desktop one and use a top-level dispatcher to switch on `window.innerWidth < 768` or mobile UA. PDF export must always render the desktop layout. See the `agent-report` skill (Mobile View section) for the full pattern — `daily-sales` is the reference implementation.
+
 ## Arguments
 
 $ARGUMENTS contains the report slug and optionally description of changes.

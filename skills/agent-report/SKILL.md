@@ -210,6 +210,57 @@ Apply ALL guidelines from the `frontend-design` skill. The rules below are **add
 
 Reports have automatic version history. Each upload saves the previous version. Users can restore via the clock button in the UI. See also the `upload-report` skill for the low-level tool usage.
 
+> **Dynamic vs static reports:** Reports uploaded via `dataviz_upload_report` are **dynamic** — they live in the `agent_reports` DB table, get version history, owner attribution (`created_by`), and the in-UI history button. Some legacy reports (`edikted-orders`, `period-comparison`, `business-analytics`) are **static** — bundled directly into the frontend at `frontend/src/dashboards/*.jsx` and registered in `frontend/src/dashboards/index.js`. Static reports bypass the dynamic loader so they have **no** history button, no DB-tracked owner, and cannot be edited via MCP. Always create new reports as dynamic via `dataviz_upload_report`. Never add to the static registry unless explicitly asked to bundle a report into the frontend build.
+
+## Mobile View (recommended pattern)
+
+If the report will be opened on phones, ship a separate `MobileX` component instead of trying to make one component responsive at every breakpoint. The `daily-sales` report is the reference implementation.
+
+**Pattern:**
+
+```jsx
+function DesktopMyReport() {
+  // full desktop layout — sidebar, multi-column tables, charts, filters
+}
+
+function MobileMyReport() {
+  // phone-optimized — single column, 2x2 KPI grid, top-N lists,
+  // simple trend chart. Reuse top-level helpers (palette, fmt$, agg)
+  // and the same SQL/useQueryData calls.
+}
+
+export default function MyReport() {
+  const [searchParams] = useSearchParams();
+  const isPdf = searchParams.get('pdf') === 'true';
+  const viewParam = searchParams.get('view');
+  const detect = () => {
+    if (typeof window === 'undefined') return false;
+    if (viewParam === 'mobile') return true;
+    if (viewParam === 'desktop') return false;
+    const narrow = window.innerWidth < 768;
+    const mobUA = /Mobi|Android|iPhone|iPod|iPad|BlackBerry|Opera Mini|IEMobile/i.test(navigator.userAgent || '');
+    return narrow || mobUA;
+  };
+  const [isMobileDevice, setIsMobileDevice] = useState(detect);
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const onResize = () => setIsMobileDevice(detect());
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, [viewParam]);
+
+  if (!isPdf && isMobileDevice) return <MobileMyReport />;
+  return <DesktopMyReport />;
+}
+```
+
+**Rules:**
+- **PDF always uses desktop.** The dispatcher checks `?pdf=true` first — keeps email/PDF export unchanged.
+- **`?view=mobile` / `?view=desktop` overrides** detection — useful for previewing the other layout from a desktop browser, and for the "View desktop version" link at the bottom of mobile.
+- Keep all top-level helpers (palette, formatters, `agg`, `getCompPeriod`, etc.) **outside** both components so both reuse them.
+- Reuse the same `useQueryData` SQL where possible. Mobile usually shows fewer dimensions (e.g. top-5 list instead of full breakdown table) — write extra mobile-only queries when the desktop ones return more rows than mobile needs.
+- Mobile component should provide a "View desktop version" link (`<a href="?view=desktop">`) for users who want the full layout on a tablet.
+
 ## Existing Examples for Reference
 
 When available in the working directory, inspect these files in the Dataviz project for design patterns:
