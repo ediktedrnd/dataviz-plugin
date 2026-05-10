@@ -39,7 +39,42 @@ one from their client's slash menu when they want guided help.
 - After upload, the report is reachable at `/report/{slug}`
 
 ## Discovery
-- For tables and column lists: `resources/read dataviz://context/data-sources.md`
-- For KPI formulas + GEO mapping: `resources/read dataviz://context/kpis.md`
-- For API patterns, widget types, naming: `resources/read dataviz://context/conventions.md`
-- For business-analyst routing across domains (sales, cohorts, replenishment, catalog, GA4): use the `edikted-ba` prompt
+
+### Top-level context (project-wide)
+- Tables + column lists: `resources/read dataviz://context/data-sources.md`
+- KPI formulas + GEO mapping: `resources/read dataviz://context/kpis.md`
+- API patterns + widget types + naming: `resources/read dataviz://context/conventions.md`
+
+### Per-skill operating instructions (read BEFORE acting on a related task)
+Each skill ships its own SKILL.md with the full step-by-step playbook. **When a
+user asks for something matching a skill, read its SKILL.md first** — these
+files contain rules, patterns, and gotchas not duplicated here.
+
+- Building a new code-based JSX dashboard / report:
+  `resources/read dataviz://skill/agent-report/SKILL.md`
+  (covers structure, DataSourceBar setup, mobile/desktop split pattern,
+  dynamic-vs-static reports caveat)
+- Uploading or updating an existing dynamic report:
+  `resources/read dataviz://skill/upload-report/SKILL.md`
+- Querying DuckDB / answering analytics questions:
+  `resources/read dataviz://skill/query-data/SKILL.md`
+- Refreshing data sources:
+  `resources/read dataviz://skill/refresh-data/SKILL.md`
+- Building a widget-based canvas dashboard:
+  `resources/read dataviz://skill/create-dashboard/SKILL.md`
+- Daily report pipeline (extract → PDF → email):
+  `resources/read dataviz://skill/daily-report/SKILL.md`
+- Visual / aesthetic direction for any dashboard:
+  `resources/read dataviz://skill/frontend-design/SKILL.md`
+
+Don't pre-read everything — fetch the SKILL.md that matches the active task.
+
+### Business-analyst routing
+- For domain-aware routing across sales, cohorts, replenishment, catalog, GA4:
+  use the `edikted-ba` prompt (slash menu in the client) or read its SKILL.md
+  + per-domain context under `dataviz://skill/edikted-ba/context/...`.
+
+### Listing everything available
+- `resources/list` returns every fetchable URI. `prompts/list` returns the
+  guided workflows the user can pick from a slash menu. Use these when in
+  doubt about what's available.
