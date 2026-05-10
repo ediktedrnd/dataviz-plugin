@@ -1,11 +1,15 @@
 /**
  * Resources loader — exposes the repo's markdown context as MCP resources.
  *
- * Two roots:
+ * Three roots:
  *   1. context/                         — top-level domain reference
  *      → URIs like dataviz://context/data-sources.md
  *
- *   2. skills/<skill>/context/...       — per-skill drill-down (e.g. edikted-ba)
+ *   2. skills/<skill>/SKILL.md          — per-skill instructions (top-level
+ *      operating guidance for analysts; e.g. agent-report, upload-report)
+ *      → URIs like dataviz://skill/<skill>/SKILL.md
+ *
+ *   3. skills/<skill>/context/...       — per-skill drill-down (e.g. edikted-ba)
  *      → URIs like dataviz://skill/<skill>/context/<path>
  *
  * The LLM can fetch these on demand via resources/read once it sees the
@@ -71,10 +75,26 @@ export function loadResources() {
     });
   }
 
-  // 2. skills/<skill>/context/...
+  // 2. skills/<skill>/SKILL.md  +  3. skills/<skill>/context/...
   let skillEntries = [];
   try { skillEntries = readdirSync(SKILLS_DIR); } catch { /* none */ }
   for (const skill of skillEntries) {
+    // 2a. Per-skill SKILL.md (top-level operating instructions)
+    const skillFile = join(SKILLS_DIR, skill, 'SKILL.md');
+    try {
+      if (statSync(skillFile).isFile()) {
+        const uri = `${URI_PREFIX}skill/${skill}/SKILL.md`;
+        result.set(uri, {
+          uri,
+          name: `skill/${skill}/SKILL.md`,
+          description: firstHeadingOf(skillFile) || `${skill}: SKILL.md`,
+          path: skillFile,
+          mimeType: 'text/markdown',
+        });
+      }
+    } catch { /* no SKILL.md for this skill */ }
+
+    // 2b. Per-skill context/ drill-down
     const skillContextDir = join(SKILLS_DIR, skill, 'context');
     let isDir = false;
     try { isDir = statSync(skillContextDir).isDirectory(); } catch { /* none */ }
