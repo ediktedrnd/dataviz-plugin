@@ -8,9 +8,9 @@ Execute SQL queries against the DuckDB analytics database and present results.
 
 ## Steps
 
-1. **Understand the question** — What does the user want to know? Reference `context/kpis.md` for standard metric definitions.
+1. **Understand the question** — What does the user want to know? Reference `context/kpis.md` for standard metric definitions. For "what data/sources/tables do we have?" → read `dataviz://context/data-sources.md` (curated catalog) BEFORE calling `dataviz_list_sources` (live API only adds extract status).
 
-2. **Find the right table** — Use `dataviz_list_tables` and `dataviz_describe_table` to find relevant columns.
+2. **Find the right table** — Use `dataviz_list_tables` and `dataviz_describe_table` to find relevant columns. For Edikted-specific table semantics, prefer `dataviz://skill/edikted-ba/context/tables/<name>.md`.
 
 3. **Write and run SQL** — Use `dataviz_query` to execute. DuckDB supports standard SQL with:
    - `DATE_TRUNC('month', date)` for date grouping
