@@ -18,6 +18,11 @@ OAuth handled. Skill docs = MCP resources `dataviz://...`. Workflows = MCP promp
 - Visual style direction → `dataviz://skill/frontend-design/SKILL.md`
 - Edikted BA routing → prompt `edikted-ba` or `dataviz://skill/edikted-ba/...`
 
+## Catalog routing (read MD first, tools second)
+- "What data/sources/tables do we have?" → read `dataviz://context/data-sources.md` BEFORE calling `dataviz_list_sources`. Only call the tool for live extract status.
+- Table semantics (columns, grain, gotchas) → `dataviz://skill/edikted-ba/context/tables/<name>.md`.
+- Domain mapping (sales, cohorts, replenishment, catalog, GA4) → `dataviz://skill/edikted-ba/context/domains/<domain>.md`.
+
 ## Reference
 - Tables + columns: `dataviz://context/data-sources.md`
 - KPI formulas + GEO mapping: `dataviz://context/kpis.md`
