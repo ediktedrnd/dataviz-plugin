@@ -16,6 +16,7 @@ OAuth handled. Skill docs = MCP resources `dataviz://...`. Workflows = MCP promp
 - Widget-based canvas dashboard → `dataviz://skill/create-dashboard/SKILL.md`
 - Daily report pipeline → `dataviz://skill/daily-report/SKILL.md`
 - Visual style direction → `dataviz://skill/frontend-design/SKILL.md`
+- GA4 source / connection / queries / quotas → `dataviz://skill/ga4-source/SKILL.md`
 - Edikted BA routing → prompt `edikted-ba` or `dataviz://skill/edikted-ba/...`
 
 ## Catalog routing (read MD first, tools second)
