@@ -116,6 +116,52 @@ export const TOOLS = [
     inputSchema: { type: 'object', properties: {} },
   },
   {
+    name: 'dataviz_create_source',
+    description: 'Create a new data source. For type="ga4" with the backend already configured via env (GA4_PROPERTY_ID + GA4_SERVICE_ACCOUNT_KEY_FILE), pass config={} or omit it — the extract pipeline falls through to the env defaults so no service-account JSON is needed. For type="postgresql" pass full {host, port, database, user, password, ssl?}. For per-source GA4 overrides, pass config={propertyId, serviceAccountKey}. Returns the new source id.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Source display name' },
+        type: { type: 'string', enum: ['postgresql', 'csv', 'google_sheets', 'ga4', 'mysql'], description: 'Source type' },
+        config: { type: 'object', description: 'Source-specific config. Empty object {} for env-default GA4. PG: {host, port, database, user, password}. GA4 override: {propertyId, serviceAccountKey}.' },
+        schedule: { type: 'string', description: 'Refresh schedule: none / 5m / 15m / 1h / 6h / 24h or raw cron. Default none. GA4 sources should stay at 24h to respect property quotas.' },
+        business_context: { type: 'string', description: 'Optional human-readable note explaining what this source is for.' },
+      },
+      required: ['name', 'type'],
+    },
+  },
+  {
+    name: 'dataviz_create_query',
+    description: 'Create a dashboard query linked to a source. For postgresql sources, sql_text is the SELECT statement that runs at extract time. For ga4 sources, sql_text is a JSON spec like {"dimensions":["date"],"metrics":["activeUsers","newUsers"],"dateRange":{"startDate":"30daysAgo","endDate":"yesterday"}}. The output materializes as DuckDB table "query_{returned_query_id}_{name}". Backend auto-triggers an extract after create.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        dashboard_id: { type: 'number', description: 'Dashboard ID that owns this query' },
+        source_id: { type: 'number', description: 'Existing source id to query against' },
+        name: { type: 'string', description: 'Query name (also feeds the DuckDB table suffix)' },
+        sql_text: { type: 'string', description: 'SQL for PG sources, or JSON spec string for GA4 sources' },
+      },
+      required: ['dashboard_id', 'source_id', 'name', 'sql_text'],
+    },
+  },
+  {
+    name: 'dataviz_delete_query',
+    description: 'Delete a dashboard query and its DuckDB output table.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        dashboard_id: { type: 'number', description: 'Dashboard ID that owns the query' },
+        query_id: { type: 'number', description: 'Query ID to delete' },
+      },
+      required: ['dashboard_id', 'query_id'],
+    },
+  },
+  {
+    name: 'dataviz_ga4_status',
+    description: 'Check whether the backend has a default GA4 connection wired via env vars. Returns { propertyConfigured, keyConfigured, propertyId, clientEmail }. Use this before creating GA4 sources with config={} to confirm the analyst can rely on env defaults.',
+    inputSchema: { type: 'object', properties: {} },
+  },
+  {
     name: 'dataviz_upload_csv',
     description: 'Upload a CSV or TSV file as a first-class data source. Creates a DuckDB table "query_{id}_{name}" that can be joined with any other table via the Relations UI. Use this for analyst-supplied config data (A/B maps, price tiers, static dimension lookups, seed lists, etc). Up to 100MB, 500 columns, 10M rows. Prefer this over INSERT/VALUES SQL — those hit an 8KB request body cap.',
     inputSchema: {
@@ -310,6 +356,48 @@ export async function handleTool(name, args) {
       return (Array.isArray(sources) ? sources : []).map(s =>
         `[${s.id}] ${s.name} (${s.type}) schedule=${s.schedule || 'none'}`
       ).join('\n') || 'No sources';
+    }
+
+    case 'dataviz_create_source': {
+      const body = {
+        name: args.name,
+        type: args.type,
+        config: args.config || {},
+        schedule: args.schedule || 'none',
+      };
+      if (args.business_context) body.business_context = args.business_context;
+      const data = await apiJson('/api/sources', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      });
+      const src = data.source || data;
+      return `Source created: id=${src.id}, name="${src.name}", type=${src.type}, schedule=${src.schedule || 'none'}`;
+    }
+
+    case 'dataviz_create_query': {
+      const data = await apiJson(`/api/dashboard-canvas/${args.dashboard_id}/queries`, {
+        method: 'POST',
+        body: JSON.stringify({
+          name: args.name,
+          sql: args.sql_text,
+          sourceId: args.source_id,
+        }),
+      });
+      const q = data.query || data;
+      const tableName = q.name ? `query_${q.id}_${q.name.replace(/[^a-zA-Z0-9_]/g, '_')}` : `query_${q.id}`;
+      return `Query created: id=${q.id}, name="${q.name}", source_id=${q.source_id}\nOutput DuckDB table: ${tableName}\nAuto-extract triggered — poll dataviz_extract_status to confirm.`;
+    }
+
+    case 'dataviz_delete_query': {
+      await apiFetch(`/api/dashboard-canvas/${args.dashboard_id}/queries/${args.query_id}`, {
+        method: 'DELETE',
+      });
+      return `Query ${args.query_id} deleted from dashboard ${args.dashboard_id}.`;
+    }
+
+    case 'dataviz_ga4_status': {
+      const data = await apiJson('/api/sources/ga4/status');
+      return JSON.stringify(data, null, 2);
     }
 
     case 'dataviz_upload_csv': {
