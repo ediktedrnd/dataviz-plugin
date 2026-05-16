@@ -1,6 +1,8 @@
 # Dataviz Data Sources
 
 > **Last reorg: 2026-05-16.** A single shared **Connection** (id=2 "Edikted Production", prod RDS, user `dataviz`) now backs all PostgreSQL sources. Sources were renamed for clarity; **IDs are preserved** so external callers (Airflow, dashboards) keep working. 195 historical CSV uploads were moved to `purpose='archive'` and are hidden from the default catalog view.
+>
+> **Also on 2026-05-16:** source `[332]` cleaned up (27 legacy schema-probe queries removed; renamed from "Style Dev — schema discovery (legacy)" to **Search — searches_raw**). New source **`[487]` Sales — order lines** created for `edktd_etl.united_order_lines` (~37M rows, ~50 min daily extract) backing dashboard 8 (Products Analysis 2.0).
 
 ## Production Data Sources (PostgreSQL)
 
@@ -14,8 +16,9 @@
 | **264** | Repeats — overview | 0 2 * * * | scheduler | `query_264_mart_repeats__wide_overview` |
 | **265** | Repeats — by SKU | 30 1 * * * | scheduler | `query_265_mart_repeats__wide_sku` |
 | **266** | Sales — n7d (normalization, sales potential when out-of-stock) | 30 2 * * * | scheduler | `query_266_n7d` |
-| **332** | Style Dev — schema discovery (legacy, cleanup pending) | 24h | scheduler | ~26 ad-hoc style_dev / sdv / schema-probe tables |
+| **332** | Search — searches_raw | 24h | scheduler | `query_127_searches_raw` |
 | **410** | Style Dev — versions | 0 4 * * * | scheduler | `query_175_style_dev_versions`, `query_177_sdv_v2_from_new_source` |
+| **487** | Sales — order lines (united_order_lines, daily ~37M) | 0 5 * * * | scheduler | `query_8_Products` |
 
 ## Production Data Sources (GA4)
 
