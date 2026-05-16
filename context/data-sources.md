@@ -1,22 +1,33 @@
 # Dataviz Data Sources
 
-## Production Data Sources
+> **Last reorg: 2026-05-16.** A single shared **Connection** (id=2 "Edikted Production", prod RDS, user `dataviz`) now backs all PostgreSQL sources. Sources were renamed for clarity; **IDs are preserved** so external callers (Airflow, dashboards) keep working. 195 historical CSV uploads were moved to `purpose='archive'` and are hidden from the default catalog view.
+>
+> **Also on 2026-05-16:** source `[332]` cleaned up (27 legacy schema-probe queries removed; renamed from "Style Dev — schema discovery (legacy)" to **Search — searches_raw**). New source **`[487]` Sales — order lines** created for `edktd_etl.united_order_lines` (~37M rows, ~50 min daily extract) backing dashboard 8 (Products Analysis 2.0).
 
-### Source 2: Edikted Production (Main)
-- **Type**: PostgreSQL
-- **Schedule**: Every 24 hours
-- **Typical extract**: ~60s, ~94K rows, 3 DuckDB tables
-- **Tables produced**:
-  - `query_4_Daily_Orders_Aggregated` — Daily aggregation (date, destination, class, o_type)
-  - `query_5_Daily_Orders_Aggregated` — Same structure, different query scope
-  - `query_6_New_Orders_AOV` — New customer + AOV metrics
+## Production Data Sources (PostgreSQL)
 
-### Source 4: Edikted Production (Cohorts)
-- **Type**: PostgreSQL
-- **Schedule**: Every 24 hours
-- **Typical extract**: ~3min, ~33 rows, 1 DuckDB table
-- **Tables produced**:
-  - `query_11_Q_Cohorts_Online` — Quarterly cohort retention and LTV
+| ID | Name | Schedule | Driven by | DuckDB tables |
+|---|---|---|---|---|
+| **2** | Sales — daily orders + A/B + UK welcome | none (API) | Airflow daily | `query_5_Daily_Orders_Aggregated`, `query_6_Last_Year_Month_Comparison`, `query_7_New_Orders_AOV`, `query_95_ab_orders_window`, `query_101_ab_panel_us_new_5k`, `query_108_uk_welcome_cohort`, `query_109_uk_welcome_panel`, `query_112_uk_welcome_daily`, `query_113_uk_welcome_kpis`, `query_114_uk_welcome_summary`, `query_115_uk_welcome_react`, `query_116_uk_welcome_gap` |
+| **4** | Sales — online cohorts (quarterly) | 24h | Airflow + scheduler | `query_11_Q_Cohorts_Online`, `query_106_Q_Cohort_Period_Matrix`, `query_107_M_Cohort_Period_Matrix` |
+| **221** | Variants — style_colors | 30 3 * * * | scheduler | `query_221_style_colors` |
+| **222** | Variants — skus by size | 0 3 * * * | scheduler | `query_222_skus` |
+| **223** | Replen — virtual_7d | 0 1 * * * | scheduler | `query_223_virtual_7d` |
+| **264** | Repeats — overview | 0 2 * * * | scheduler | `query_264_mart_repeats__wide_overview` |
+| **265** | Repeats — by SKU | 30 1 * * * | scheduler | `query_265_mart_repeats__wide_sku` |
+| **266** | Sales — n7d (normalization, sales potential when out-of-stock) | 30 2 * * * | scheduler | `query_266_n7d` |
+| **332** | Search — searches_raw | 24h | scheduler | `query_127_searches_raw` |
+| **410** | Style Dev — versions | 0 4 * * * | scheduler | `query_175_style_dev_versions`, `query_177_sdv_v2_from_new_source` |
+| **487** | Sales — order lines (united_order_lines, daily ~37M) | 0 5 * * * | scheduler | `query_8_Products` |
+
+## Production Data Sources (GA4)
+
+| ID | Name | Schedule | Notes |
+|---|---|---|---|
+| **390** | GA4 — edikted.com | 24h | Main GA4 source for dashboards 35, 36, 37 |
+| **389** | GA4 — Sales by Store (embedded) | none | Embedded source bound to dashboard 27 |
+
+**Cron times are UTC** (NY is UTC−5/−4). Times 1–4am UTC fall outside Airflow's daily window to avoid contention.
 
 ## Key DuckDB Tables
 
@@ -74,6 +85,24 @@ SKU = `(style_color × size)`. Bridge between catalog and inventory/sales.
 | `size` | e.g. XS/S/M/L |
 | `style_color` | FK → `style_colors.id` |
 | `weight` | Shipping weight |
+
+### `public.style_dev_versions`
+Style-development versioning — one row per `(style_dev_id, version)`. Tracks each redevelopment iteration with its techpack, designer, tech-designer, category, and reason. Sits upstream of `style_colors` in the product-creation flow.
+
+DuckDB table: `query_175_style_dev_versions` (source 410, refreshed daily at 04:00 UTC).
+
+| Column | Notes |
+|---|---|
+| `id` | PK |
+| `style_dev_id` | FK → style_developments.id (logical group) |
+| `version` | Iteration number (1, 2, 3…) |
+| `redeveloped` | Boolean — true if this version was a redevelopment |
+| `reason` | Free-text reason for the version (e.g. `Production / QC`) |
+| `occasion`, `type`, `category`, `template` | FK lookups (merchandising metadata) |
+| `designer`, `tech_designer` | FK → users (creator + technical owner) |
+| `techpack` | Google Sheets URL for the techpack |
+| `style_name` | Display name |
+| `created_at`, `updated_at` | Timestamps |
 
 ### `public.replen_statuses`
 Lookup for per-store-style-color replenishment status (`Active`, `Paused`, `Archived`, …). Joined via `store_style_colors.replen_status`.
