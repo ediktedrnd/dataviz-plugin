@@ -132,7 +132,7 @@ export const TOOLS = [
   },
   {
     name: 'dataviz_create_query',
-    description: 'Create a dashboard query linked to a source. For postgresql sources, sql_text is the SELECT statement that runs at extract time. For ga4 sources, sql_text is a JSON spec like {"dimensions":["date"],"metrics":["activeUsers","newUsers"],"dateRange":{"startDate":"30daysAgo","endDate":"yesterday"}}. The output materializes as DuckDB table "query_{returned_query_id}_{name}". Backend auto-triggers an extract after create.',
+    description: 'Create a dashboard query linked to a source. For postgresql sources, sql_text is the SELECT statement that runs at extract time. For ga4 sources, sql_text is a JSON spec like {"dimensions":["date"],"metrics":["activeUsers","newUsers"],"dateRange":{"startDate":"30daysAgo","endDate":"yesterday"}}. The output materializes as DuckDB table "query_{returned_query_id}_{name}". Backend auto-triggers an extract after create. Optional incremental config: when enabled, only rows where `column >= NOW() - lookback_days` are pulled from PG each refresh, and just that window is swapped in DuckDB (first extract still does a full load).',
     inputSchema: {
       type: 'object',
       properties: {
@@ -140,8 +140,40 @@ export const TOOLS = [
         source_id: { type: 'number', description: 'Existing source id to query against' },
         name: { type: 'string', description: 'Query name (also feeds the DuckDB table suffix)' },
         sql_text: { type: 'string', description: 'SQL for PG sources, or JSON spec string for GA4 sources' },
+        incremental: {
+          type: 'object',
+          description: 'Optional incremental window-replace config. Omit for full-refresh on every extract.',
+          properties: {
+            enabled:       { type: 'boolean', description: 'Set true to enable window-replace mode.' },
+            column:        { type: 'string', description: 'Timestamp/date column in the query output. Must appear at the top-level SELECT.' },
+            lookback_days: { type: 'number', description: 'How many days of recent data to re-extract on each refresh (e.g. 14, 30, 60).' },
+          },
+        },
       },
       required: ['dashboard_id', 'source_id', 'name', 'sql_text'],
+    },
+  },
+  {
+    name: 'dataviz_update_query',
+    description: 'Update an existing dashboard query — name, SQL, or incremental config. Pass only the fields you want to change. Pass `incremental: { enabled: false }` to clear incremental mode.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        dashboard_id: { type: 'number', description: 'Dashboard ID that owns the query' },
+        query_id:     { type: 'number', description: 'Query ID to update' },
+        name:         { type: 'string', description: 'New query name (optional)' },
+        sql_text:     { type: 'string', description: 'New SQL text (optional)' },
+        incremental:  {
+          type: 'object',
+          description: 'Optional. Same shape as in dataviz_create_query. Pass `{ enabled: false }` to clear.',
+          properties: {
+            enabled:       { type: 'boolean' },
+            column:        { type: 'string' },
+            lookback_days: { type: 'number' },
+          },
+        },
+      },
+      required: ['dashboard_id', 'query_id'],
     },
   },
   {
@@ -375,17 +407,56 @@ export async function handleTool(name, args) {
     }
 
     case 'dataviz_create_query': {
+      const body = {
+        name: args.name,
+        sql: args.sql_text,
+        sourceId: args.source_id,
+      };
+      if (args.incremental && typeof args.incremental === 'object') {
+        body.incremental = {
+          enabled: !!args.incremental.enabled,
+          column: args.incremental.column || null,
+          lookbackDays: args.incremental.lookback_days ?? null,
+        };
+      }
       const data = await apiJson(`/api/dashboard-canvas/${args.dashboard_id}/queries`, {
         method: 'POST',
-        body: JSON.stringify({
-          name: args.name,
-          sql: args.sql_text,
-          sourceId: args.source_id,
-        }),
+        body: JSON.stringify(body),
       });
       const q = data.query || data;
       const tableName = q.name ? `query_${q.id}_${q.name.replace(/[^a-zA-Z0-9_]/g, '_')}` : `query_${q.id}`;
-      return `Query created: id=${q.id}, name="${q.name}", source_id=${q.source_id}\nOutput DuckDB table: ${tableName}\nAuto-extract triggered — poll dataviz_extract_status to confirm.`;
+      const incLine = q.incremental_enabled
+        ? `\nIncremental: ${q.incremental_column} ≥ NOW()-${q.incremental_lookback_days}d (window-replace)`
+        : '';
+      return `Query created: id=${q.id}, name="${q.name}", source_id=${q.source_id}\nOutput DuckDB table: ${tableName}${incLine}\nAuto-extract triggered — poll dataviz_extract_status to confirm.`;
+    }
+
+    case 'dataviz_update_query': {
+      const { dashboard_id, query_id, name, sql_text, incremental } = args;
+      if (!dashboard_id || !query_id) {
+        throw new Error('dashboard_id and query_id are required');
+      }
+      const body = {};
+      if (name !== undefined) body.name = name;
+      if (sql_text !== undefined) body.sql = sql_text;
+      if (incremental !== undefined) {
+        body.incremental = incremental === null
+          ? { enabled: false }
+          : {
+              enabled: !!incremental.enabled,
+              column: incremental.column || null,
+              lookbackDays: incremental.lookback_days ?? null,
+            };
+      }
+      const data = await apiJson(`/api/dashboard-canvas/${dashboard_id}/queries/${query_id}`, {
+        method: 'PUT',
+        body: JSON.stringify(body),
+      });
+      const q = data.query || {};
+      const incLine = q.incremental_enabled
+        ? `incremental: ${q.incremental_column} ≥ NOW()-${q.incremental_lookback_days}d`
+        : 'incremental: off';
+      return `Query ${query_id} updated. name="${q.name}", ${incLine}. Re-extract triggered.`;
     }
 
     case 'dataviz_delete_query': {
