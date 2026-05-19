@@ -2,7 +2,7 @@
 
 ## Production Data Sources
 
-> Source/query inventory captured 2026-05-17 from the live backend. Run `dataviz_list_sources` for the current list of sources; the catalog drifts as new queries are added.
+> Source/query inventory captured 2026-05-19 from the live backend (260 rows in `data_sources`; this doc covers the `purpose='production'` postgresql + ga4 sources only). Run `dataviz_list_sources` for the current list; the catalog drifts daily as analysts upload CSVs and create dashboard-embedded sources.
 
 ### Architecture: connections vs. data sources
 
@@ -41,6 +41,17 @@ Triggering an extract runs **every query attached to that source**, so a "catch-
 - **Tables produced**:
   - `query_198_Budget_Forecast` — daily budget & forecast from `dbt_marts.fact_budget_forecast`. Columns: `date, otype, class, dest, budget, forecast`. Joinable to `query_5_Daily_Orders_Aggregated` on `(date, otype↔o_type, class, dest↔destination)`.
 
+### Source 509: Edikted Production *(legacy naming — pending rename + cleanup)*
+- **Type**: PostgreSQL (connection 2)
+- **Schedule**: every 24h
+- **Ownership**: `published` (anti-pattern — all 7 queries belong to dashboard 7 only; should be `embedded` per [embedded-source guidance](#source-508-budget--forecast--daily-embedded-owned-by-dashboard-39))
+- **Status**: junk-drawer catch-all for ad-hoc exploration on dashboard 7. Re-extracts every 24h whether or not the dashboard is in active use.
+- **Queries attached**:
+  - `probe_uo_state_cols`, `_probe_uo_channel` — schema probes, candidates for deletion
+  - `sync_qa_new_suppliers_since_may15` — one-off QA, candidate for deletion
+  - `tax_free_state_daily`, `monthly_app_vs_web_split`, `monthly_influencer_aggregates`, `top_influencers_12m` — exploratory analyses against `edktd_etl.united_orders`
+- **Action item**: rename to a business-meaningful name (e.g. "Sales — ad-hoc exploration") **or** convert to `embedded` on dashboard 7 (or split per-analysis); legacy "Edikted Production" name is a holdover from before the naming policy.
+
 ### Source 4: Sales — online cohorts (quarterly)
 - **Type**: PostgreSQL (prod RDS, `postgres` DB)
 - **Schedule**: every 24h
@@ -62,10 +73,11 @@ Triggering an extract runs **every query attached to that source**, so a "catch-
 | 332 | Search — searches_raw | every 24h |
 | 410 | Style Dev — versions | 04:00 daily |
 | 487 | Sales — order lines (united_order_lines, daily ~37M) | 05:00 daily |
-| 488 | Repeats — sc_united_with_groups | 02:30 daily |
+| 488 | Repeats — sc_united_with_groups | 02:30 daily ⚠️ `connection_id` is NULL — extract likely fails until connection is wired |
 
 ### GA4
-- **Source 390**: GA4 — edikted.com, schedule=every 24h. See `dataviz://skill/ga4-source/SKILL.md`.
+- **Source 390**: GA4 — edikted.com, `published`, schedule=every 24h. Shared across dashboards. See `dataviz://skill/ga4-source/SKILL.md`.
+- **Source 389**: GA4 — Sales by Store, `embedded` (owned by dashboard 27, "Sales by Store"), schedule=on-demand. Dashboard-specific GA4 pulls — refresh only when that dashboard is opened/triggered.
 
 ## Key DuckDB Tables
 
