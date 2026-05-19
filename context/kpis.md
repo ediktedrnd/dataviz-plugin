@@ -32,13 +32,15 @@ CASE WHEN country::varchar IN (
 - **US+** = Countries served from the US warehouse/site
 - **UK+** = Countries served from the UK warehouse/site
 - This mapping aligns historical data correctly for YoY comparisons
+- **Use this CASE, NOT the `destination` column** — `destination` shifted over time and breaks YoY.
 
 ## Order Class Hierarchy
 
 ```
 ONLINE (edikted.com, TikTok Shop, etc.)
 RETAIL (physical stores)
-DROP (B2B / wholesale / dropship)
+DROP   (B2B / wholesale / dropship)
+OTHER  (test / internal — ALWAYS filter WHERE class != 'OTHER')
 ```
 
 ## Cohort Metrics (query_11_Q_Cohorts_Online)

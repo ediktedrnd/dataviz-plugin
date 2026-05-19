@@ -12,13 +12,6 @@ Full ruleset moved out of `REMOTE_INSTRUCTIONS.md` so the session-init payload s
 - Widget IDs must be unique: prefix `w_` + random string.
 - For large saves (>15KB): the MCP server handles chunked upload automatically.
 
-## Data (DuckDB / `dataviz_query`)
-- Primary sales table: `query_5_Daily_Orders_Aggregated`.
-- Cohort table: `query_11_Q_Cohorts_Online`.
-- GEO grouping: use the country→store CASE expression — see `dataviz://context/kpis.md` — NOT the `destination` column.
-- Always wrap denominators with `NULLIF(..., 0)` to prevent division by zero.
-- Always filter `WHERE class != 'OTHER'` to exclude test/internal data.
-
 ## Reports (JSX, `dataviz_upload_report`)
 - Dynamic reports use React + Recharts + the `useQueryData` hook.
 - Import shared deps from `window.__DATAVIZ`.
