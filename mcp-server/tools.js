@@ -48,12 +48,25 @@ export const TOOLS = [
   },
   {
     name: 'dataviz_list_tables',
-    description: 'List all available DuckDB tables with their column schemas. Use this to discover what data is available before writing queries.',
+    description: 'List all available DuckDB tables with their column schemas. Use this to discover what data is available before writing queries. Before calling, you MUST first read the data-sources catalog (via dataviz_read_context or MCP resources/read) and pass the URIs in acknowledged_context_read — the live table list is verbose (hundreds of tables, many are archived A/B uploads), and the catalog tells you which ones are production-relevant.',
     inputSchema: {
       type: 'object',
       properties: {
         dashboard_id: { type: 'number', description: 'Optional: filter tables linked to a specific dashboard' },
+        acknowledged_context_read: {
+          type: 'array',
+          minItems: 1,
+          items: {
+            type: 'string',
+            enum: [
+              'dataviz://context/data-sources.md',
+              'dataviz://skill/edikted-ba/SKILL.md',
+            ],
+          },
+          description: 'REQUIRED. List every dataviz:// resource URI you actually loaded in THIS session (via dataviz_read_context or MCP resources/read). data-sources.md documents which DuckDB tables are production (Key DuckDB Tables section) vs archived CSV uploads — without it, the raw list is hard to interpret.',
+        },
       },
+      required: ['acknowledged_context_read'],
     },
   },
   {
@@ -140,8 +153,25 @@ export const TOOLS = [
   },
   {
     name: 'dataviz_list_sources',
-    description: 'List all configured data sources with their IDs, names, types, and schedules.',
-    inputSchema: { type: 'object', properties: {} },
+    description: 'List all configured data sources with their IDs, names, types, and schedules. Before calling, you MUST first read the data-sources catalog (via dataviz_read_context or MCP resources/read) and pass the URIs in acknowledged_context_read — the live list is large (260+ rows including archived CSV uploads); the catalog tells you which sources are production catch-alls vs embedded vs archive, and flags legacy-named sources.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        acknowledged_context_read: {
+          type: 'array',
+          minItems: 1,
+          items: {
+            type: 'string',
+            enum: [
+              'dataviz://context/data-sources.md',
+              'dataviz://skill/edikted-ba/SKILL.md',
+            ],
+          },
+          description: 'REQUIRED. List every dataviz:// resource URI you actually loaded in THIS session (via dataviz_read_context or MCP resources/read). data-sources.md is the inventory of production postgresql + ga4 sources with their ownership/schedule context — without it, the raw list of 260 rows is hard to interpret.',
+        },
+      },
+      required: ['acknowledged_context_read'],
+    },
   },
   {
     name: 'dataviz_create_source',
@@ -342,6 +372,13 @@ export async function handleTool(name, args) {
     }
 
     case 'dataviz_list_tables': {
+      const ackTables = args.acknowledged_context_read;
+      if (!Array.isArray(ackTables) || ackTables.length === 0) {
+        throw new Error(
+          'acknowledged_context_read is required and must list at least one dataviz:// URI you have read in this session. ' +
+          'Call dataviz_read_context({ uri: "dataviz://context/data-sources.md" }) first to learn which tables are production vs archived, then retry dataviz_list_tables with that URI in acknowledged_context_read.'
+        );
+      }
       const url = args.dashboard_id
         ? `/api/extract/tables?dashboard_id=${args.dashboard_id}`
         : '/api/extract/tables';
@@ -426,6 +463,13 @@ export async function handleTool(name, args) {
     }
 
     case 'dataviz_list_sources': {
+      const ackSources = args.acknowledged_context_read;
+      if (!Array.isArray(ackSources) || ackSources.length === 0) {
+        throw new Error(
+          'acknowledged_context_read is required and must list at least one dataviz:// URI you have read in this session. ' +
+          'Call dataviz_read_context({ uri: "dataviz://context/data-sources.md" }) first to learn the production source inventory, then retry dataviz_list_sources with that URI in acknowledged_context_read.'
+        );
+      }
       const data = await apiJson('/api/sources');
       const sources = data.sources || data || [];
       return (Array.isArray(sources) ? sources : []).map(s =>
