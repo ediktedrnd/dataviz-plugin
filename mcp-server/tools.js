@@ -9,13 +9,29 @@ import { apiJson, apiFetch, getBaseUrl, getToken } from './auth.js';
 export const TOOLS = [
   {
     name: 'dataviz_query',
-    description: 'Execute a SQL query against DuckDB (read-only analytics database). Use this to explore data, check table contents, or run ad-hoc analytics. Example: SELECT date, SUM(total_revenue) FROM query_5_Daily_Orders_Aggregated GROUP BY date ORDER BY date DESC LIMIT 10',
+    description: 'Execute a SQL query against DuckDB (read-only analytics database). Use this to explore data, check table contents, or run ad-hoc analytics. Example: SELECT date, SUM(total_revenue) FROM query_5_Daily_Orders_Aggregated GROUP BY date ORDER BY date DESC LIMIT 10. Before calling this tool you MUST first read the relevant business context via resources/read and pass the URIs you read in acknowledged_context_read — table names, status filters and KPI formulas in this warehouse are non-obvious and queries without context routinely return wrong numbers.',
     inputSchema: {
       type: 'object',
       properties: {
         sql: { type: 'string', description: 'SQL query to execute against DuckDB' },
+        acknowledged_context_read: {
+          type: 'array',
+          minItems: 1,
+          items: {
+            type: 'string',
+            enum: [
+              'dataviz://context/kpis.md',
+              'dataviz://context/data-sources.md',
+              'dataviz://context/conventions.md',
+              'dataviz://context/rules.md',
+              'dataviz://skill/query-data/SKILL.md',
+              'dataviz://skill/edikted-ba/SKILL.md',
+            ],
+          },
+          description: 'REQUIRED. List every dataviz:// resource URI you actually loaded via resources/read in THIS session before running this query. Do NOT list URIs you have not read — the goal is to confirm you have the business context (KPI definitions, table semantics, status filters) needed to write a correct query. At minimum, read dataviz://context/kpis.md and dataviz://context/data-sources.md when answering revenue/orders/cohort questions.',
+        },
       },
-      required: ['sql'],
+      required: ['sql', 'acknowledged_context_read'],
     },
   },
   {
@@ -290,6 +306,13 @@ async function chunkedUploadReport(slug, title, description, jsxSource) {
 export async function handleTool(name, args) {
   switch (name) {
     case 'dataviz_query': {
+      const ack = args.acknowledged_context_read;
+      if (!Array.isArray(ack) || ack.length === 0) {
+        throw new Error(
+          'acknowledged_context_read is required and must list at least one dataviz:// URI you have read via resources/read in this session. ' +
+          'Read the relevant context first (e.g. dataviz://context/kpis.md, dataviz://context/data-sources.md, dataviz://skill/edikted-ba/SKILL.md), then retry with those URIs in acknowledged_context_read.'
+        );
+      }
       const data = await apiJson('/api/extract/query-duck', {
         method: 'POST',
         body: JSON.stringify({ sql: args.sql }),
