@@ -2,30 +2,79 @@
 
 ## Production Data Sources
 
-### Source 2: Edikted Production (Main)
-- **Type**: PostgreSQL
-- **Schedule**: Every 24 hours
-- **Typical extract**: ~60s, ~94K rows, 3 DuckDB tables
-- **Tables produced**:
-  - `query_4_Daily_Orders_Aggregated` — Daily aggregation (date, destination, class, o_type)
-  - `query_5_Daily_Orders_Aggregated` — Same structure, different query scope
-  - `query_6_New_Orders_AOV` — New customer + AOV metrics
+> Source/query inventory captured 2026-05-17 from the live backend. Run `dataviz_list_sources` for the current list of sources; the catalog drifts as new queries are added.
 
-### Source 4: Edikted Production (Cohorts)
-- **Type**: PostgreSQL
-- **Schedule**: Every 24 hours
-- **Typical extract**: ~3min, ~33 rows, 1 DuckDB table
+### Architecture: connections vs. data sources
+
+Dataviz has a 3-tier model that decouples credentials from refresh scope:
+
+- **`connections`** = credentials (host, user, password). Currently one: "Edikted Production" (id=2, postgresql).
+- **`data_sources`** = a *logical group of queries* with its own schedule. `ownership_mode='published'` means shared across dashboards; `ownership_mode='embedded'` (with `dashboard_id`) means owned by one dashboard.
+- **`dashboard_queries`** = individual SQL statements that materialize into DuckDB tables.
+
+Triggering an extract runs **every query attached to that source**, so a "catch-all" published source (like source 2 below) reruns all its queries on every refresh. To give a dashboard its own independent refresh cadence, create an `embedded` source bound to that dashboard (reusing the same `connection_id`) — see Source 508 below as the reference example.
+
+### Source 2: Sales — daily orders + A/B + UK welcome (published, catch-all)
+- **Type**: PostgreSQL (connection 2 — Edikted Production)
+- **Schedule**: on-demand (no cron — refreshed by upstream jobs/manual triggers)
+- **Typical extract**: ~25–30 min, ~880K rows, 12 DuckDB tables
+- **Note**: legacy catch-all. New dashboard-specific queries should live on their own `embedded` source (see source 508 example), not here.
+- **Tables produced** (DuckDB table = `query_{id}_{name}`):
+  - `query_5_Daily_Orders_Aggregated` — primary sales aggregation (date × destination × class × o_type)
+  - `query_6_Last_Year_Month_Comparison` — YoY monthly comparison
+  - `query_7_New_Orders_AOV` — new-customer + AOV metrics
+  - `query_95_ab_orders_window` — A/B test orders window
+  - `query_101_ab_panel_us_new_5k` — A/B panel (US new-customer 5K)
+  - `query_108_uk_welcome_cohort` — UK welcome-flow cohorts
+  - `query_109_uk_welcome_panel` — UK welcome-flow panel
+  - `query_112_uk_welcome_daily` — UK welcome-flow daily
+  - `query_113_uk_welcome_kpis` — UK welcome-flow KPIs
+  - `query_114_uk_welcome_summary` — UK welcome-flow summary
+  - `query_115_uk_welcome_react` — UK welcome reactivation
+  - `query_116_uk_welcome_gap` — UK welcome gap analysis
+
+### Source 508: Budget & Forecast — daily (embedded, owned by dashboard 39)
+- **Type**: PostgreSQL (connection 2 — same Edikted Production credentials)
+- **Schedule**: on-demand
+- **Typical extract**: ~1 min, 65K rows, 1 DuckDB table
+- **Reference pattern**: dashboard-owned source. Refresh runs only this source's query — does not touch the source-2 catch-all.
 - **Tables produced**:
-  - `query_11_Q_Cohorts_Online` — Quarterly cohort retention and LTV
+  - `query_198_Budget_Forecast` — daily budget & forecast from `dbt_marts.fact_budget_forecast`. Columns: `date, otype, class, dest, budget, forecast`. Joinable to `query_5_Daily_Orders_Aggregated` on `(date, otype↔o_type, class, dest↔destination)`.
+
+### Source 4: Sales — online cohorts (quarterly)
+- **Type**: PostgreSQL (prod RDS, `postgres` DB)
+- **Schedule**: every 24h
+- **Typical extract**: ~3min
+- **Tables produced**:
+  - `query_11_Q_Cohorts_Online` — quarterly cohort retention and LTV
+  - `query_106_Q_Cohort_Period_Matrix` — quarterly cohort period matrix
+  - `query_107_M_Cohort_Period_Matrix` — monthly cohort period matrix
+
+### Other PostgreSQL sources (current)
+| ID | Name | Schedule |
+|---|---|---|
+| 221 | Variants — style_colors | 03:30 daily |
+| 222 | Variants — skus by size | 03:00 daily |
+| 223 | Replen — virtual_7d | 01:00 daily |
+| 264 | Repeats — overview | 02:00 daily |
+| 265 | Repeats — by SKU | 01:30 daily |
+| 266 | Sales — n7d (normalization) | 02:30 daily |
+| 332 | Search — searches_raw | every 24h |
+| 410 | Style Dev — versions | 04:00 daily |
+| 487 | Sales — order lines (united_order_lines, daily ~37M) | 05:00 daily |
+| 488 | Repeats — sc_united_with_groups | 02:30 daily |
+
+### GA4
+- **Source 390**: GA4 — edikted.com, schedule=every 24h. See `dataviz://skill/ga4-source/SKILL.md`.
 
 ## Key DuckDB Tables
 
 ### query_5_Daily_Orders_Aggregated
 The primary sales table. Columns:
 - `date` (DATE) — order date
-- `destination` (VARCHAR) — shipping destination (US/UK)
+- `destination` (VARCHAR) — shipping destination (US/UK). For GEO grouping in analyses, prefer the country→store CASE in `dataviz://context/kpis.md` over this column — `destination` shifted over time and breaks YoY alignment.
 - `o_type` (VARCHAR) — order type (edikted.com, TikTok, Retail, B2B, etc.)
-- `class` (VARCHAR) — order class (ONLINE, RETAIL, DROP)
+- `class` (VARCHAR) — order class. Values: `ONLINE` (edikted.com, TikTok Shop, etc.), `RETAIL` (physical stores), `DROP` (B2B / wholesale / dropship), `OTHER` (test / internal). **Always filter `WHERE class != 'OTHER'`** — OTHER rows distort revenue, AOV, and every aggregation.
 - `country` (VARCHAR) — customer country (full name)
 - `order_count` (INTEGER)
 - `total_units` (INTEGER)
