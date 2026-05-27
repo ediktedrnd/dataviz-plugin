@@ -174,14 +174,20 @@ export const TOOLS = [
     },
   },
   {
+    name: 'dataviz_list_connections',
+    description: 'List reusable database connections (the shared {host, port, user, password} primitive that data sources can reference). Use the returned id with dataviz_create_source({ connection_id }) to spin up a new source that points at an existing cluster without re-entering credentials. Credentials are never returned — passwords are masked server-side.',
+    inputSchema: { type: 'object', properties: {} },
+  },
+  {
     name: 'dataviz_create_source',
-    description: 'Create a new data source. For type="ga4" with the backend already configured via env (GA4_PROPERTY_ID + GA4_SERVICE_ACCOUNT_KEY_FILE), pass config={} or omit it — the extract pipeline falls through to the env defaults so no service-account JSON is needed. For type="postgresql" pass full {host, port, database, user, password, ssl?}. For per-source GA4 overrides, pass config={propertyId, serviceAccountKey}. Returns the new source id.',
+    description: 'Create a new data source. Two modes:\n\n1. REUSE AN EXISTING CONNECTION (preferred, no credentials in chat): pass `connection_id` from dataviz_list_connections plus `name`, `type` (must match the connection\'s type), and optional `schedule` / `business_context`. Leave `config` empty — the extract pipeline reads creds fresh from the connection on each run, so password rotations cascade automatically.\n\n2. INLINE CREDENTIALS: pass full `config`. For type="postgresql": {host, port, database, user, password, ssl?}. For type="ga4" with env defaults configured (GA4_PROPERTY_ID + GA4_SERVICE_ACCOUNT_KEY_FILE), pass config={}; for per-source GA4 override: {propertyId, serviceAccountKey}.\n\nReturns the new source id.',
     inputSchema: {
       type: 'object',
       properties: {
         name: { type: 'string', description: 'Source display name' },
-        type: { type: 'string', enum: ['postgresql', 'csv', 'google_sheets', 'ga4', 'mysql'], description: 'Source type' },
-        config: { type: 'object', description: 'Source-specific config. Empty object {} for env-default GA4. PG: {host, port, database, user, password}. GA4 override: {propertyId, serviceAccountKey}.' },
+        type: { type: 'string', enum: ['postgresql', 'csv', 'google_sheets', 'ga4', 'mysql'], description: 'Source type. When connection_id is set, must match the connection\'s type.' },
+        connection_id: { type: 'number', description: 'Optional. Id from dataviz_list_connections to reuse. When set, `config` must be empty.' },
+        config: { type: 'object', description: 'Source-specific config (only when connection_id is NOT set). Empty {} for env-default GA4. PG: {host, port, database, user, password}. GA4 override: {propertyId, serviceAccountKey}.' },
         schedule: { type: 'string', description: 'Refresh schedule: none / 5m / 15m / 1h / 6h / 24h or raw cron. Default none. GA4 sources should stay at 24h to respect property quotas.' },
         business_context: { type: 'string', description: 'Optional human-readable note explaining what this source is for.' },
       },
@@ -477,6 +483,14 @@ export async function handleTool(name, args) {
       ).join('\n') || 'No sources';
     }
 
+    case 'dataviz_list_connections': {
+      const data = await apiJson('/api/connections');
+      const connections = data.connections || data || [];
+      return (Array.isArray(connections) ? connections : []).map(c =>
+        `[${c.id}] ${c.name} (${c.type}) sources=${c.source_count ?? 0}`
+      ).join('\n') || 'No connections';
+    }
+
     case 'dataviz_create_source': {
       const body = {
         name: args.name,
@@ -484,13 +498,15 @@ export async function handleTool(name, args) {
         config: args.config || {},
         schedule: args.schedule || 'none',
       };
+      if (args.connection_id != null) body.connection_id = args.connection_id;
       if (args.business_context) body.business_context = args.business_context;
       const data = await apiJson('/api/sources', {
         method: 'POST',
         body: JSON.stringify(body),
       });
       const src = data.source || data;
-      return `Source created: id=${src.id}, name="${src.name}", type=${src.type}, schedule=${src.schedule || 'none'}`;
+      const connLine = src.connection_id ? `, connection_id=${src.connection_id}` : '';
+      return `Source created: id=${src.id}, name="${src.name}", type=${src.type}, schedule=${src.schedule || 'none'}${connLine}`;
     }
 
     case 'dataviz_create_query': {
