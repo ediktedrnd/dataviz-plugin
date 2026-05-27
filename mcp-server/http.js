@@ -106,6 +106,35 @@ app.get('/mcp/.well-known/oauth-protected-resource', (_req, res) => {
   }
 });
 
+// ── Authorization-server metadata mirror ────────────────────────────
+// Some MCP clients (e.g. Base44) don't follow RFC 9728 — they don't read
+// `WWW-Authenticate: Bearer resource_metadata=...` and they don't fetch
+// /.well-known/oauth-protected-resource. Instead they probe
+// /.well-known/oauth-authorization-server directly on the resource host
+// and bail when it 404s. Mirror the upstream auth server's metadata so
+// those clients can complete discovery. Spec-compliant clients keep using
+// the protected-resource flow above; this route is additive.
+app.get('/.well-known/oauth-authorization-server', async (_req, res) => {
+  try {
+    const issuer = process.env.OAUTH_ISSUER;
+    if (!issuer) throw new Error('OAUTH_ISSUER is not set');
+    const upstream = `${issuer.replace(/\/$/, '')}/.well-known/oauth-authorization-server`;
+    const upstreamRes = await fetch(upstream, {
+      // Dataviz ALB WAF rejects non-browser UAs.
+      headers: { 'User-Agent': 'Mozilla/5.0 (dataviz-mcp well-known mirror)' },
+    });
+    const body = await upstreamRes.text();
+    res
+      .status(upstreamRes.status)
+      .type('application/json')
+      .set('Cache-Control', 'public, max-age=300')
+      .send(body);
+  } catch (err) {
+    console.error('[dataviz-mcp] auth-server metadata mirror error:', err.message);
+    res.status(502).json({ error: 'upstream_unavailable', error_description: err.message });
+  }
+});
+
 // ── MCP endpoint ────────────────────────────────────────────────────
 // One handler for POST (client→server JSON-RPC), GET (server→client SSE
 // stream), and DELETE (session terminate). The SDK transport dispatches
