@@ -104,6 +104,7 @@ jobs:
       task-definition-family: edikted-dataviz-mcp-backend-${{ needs.setup.outputs.environment }}
       container-name: dataviz-mcp-backend
       image-uri: ${{ needs.build.outputs.image_uri }}
+      wait-for-stability: true
     secrets: inherit
 
   # ============================================
