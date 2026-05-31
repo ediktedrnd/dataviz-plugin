@@ -19,7 +19,7 @@ on:
         required: true
         type: string
       environment:
-        description: "Target GitHub environment (production)"
+        description: "Target GitHub environment (integration|staging|production)"
         required: true
         type: string
       image-tag:
