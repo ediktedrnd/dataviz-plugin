@@ -5,6 +5,11 @@
 import { apiJson, apiFetch, getBaseUrl, getToken } from './auth.js';
 import { readResource } from './resources.js';
 
+// Cache last-fetched report source per slug so dataviz_upload_report can send
+// the base_hash (content fingerprint) the edit was based on — lets the server
+// 3-way-merge concurrent edits instead of silently overwriting another editor.
+const reportSourceCache = new Map();
+
 // ── Tool Definitions (JSON Schema) ─────────────────────────────
 
 export const TOOLS = [
@@ -272,7 +277,7 @@ export const TOOLS = [
   },
   {
     name: 'dataviz_upload_report',
-    description: 'Upload or update a dynamic JSX report. The report is compiled server-side and served at /report/{slug}. Uses chunked upload for large files.',
+    description: 'Upload or update a dynamic JSX report (compiled server-side, served at /report/{slug}; chunked upload for large files). To UPDATE an existing report you MUST first call dataviz_get_report_source so your edit is based on the latest version — the uploader then sends base_hash automatically and the server 3-way-merges any concurrent edits. Updating without a fetched base is refused (would risk overwriting another editor).',
     inputSchema: {
       type: 'object',
       properties: {
@@ -280,8 +285,20 @@ export const TOOLS = [
         title: { type: 'string', description: 'Report title' },
         description: { type: 'string', description: 'Report description' },
         jsx_source: { type: 'string', description: 'Full JSX source code of the report component' },
+        base_hash: { type: 'string', description: 'Optional. content_hash the edit is based on. Usually omitted — taken from the prior dataviz_get_report_source automatically.' },
       },
       required: ['slug', 'jsx_source'],
+    },
+  },
+  {
+    name: 'dataviz_get_report_source',
+    description: 'Fetch the current JSX source of a report plus its version and content_hash. ALWAYS call this before editing/updating an existing report: it gives you the latest source to edit and lets dataviz_upload_report send the correct base_hash, preventing silent overwrites of other editors.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        slug: { type: 'string', description: 'Report slug (e.g. "daily-sales")' },
+      },
+      required: ['slug'],
     },
   },
   {
@@ -326,7 +343,7 @@ async function chunkedUploadDashboard(dashboardId, payload) {
   });
 }
 
-async function chunkedUploadReport(slug, title, description, jsxSource) {
+async function chunkedUploadReport(slug, title, description, jsxSource, baseHash) {
   // Gzip the source before base64-encoding the chunks. AWS WAF managed
   // SQL-injection rules base64-decode bodies for inspection but don't gunzip,
   // so report code containing SELECT/SUM/WHERE etc. stays invisible to them.
@@ -345,10 +362,17 @@ async function chunkedUploadReport(slug, title, description, jsxSource) {
     });
   }
 
-  return apiJson(`/api/reports/${slug}/chunk/complete`, {
+  // base_hash = fingerprint of the source this edit was based on. The server
+  // requires it on updates and uses it to 3-way-merge concurrent edits instead
+  // of silently overwriting. Use apiFetch (not apiJson) so we can read 428/409.
+  const completeBody = { title, description, compressed: 'gzip' };
+  if (baseHash != null) completeBody.base_hash = baseHash;
+  const res = await apiFetch(`/api/reports/${slug}/chunk/complete`, {
     method: 'POST',
-    body: JSON.stringify({ title, description, compressed: 'gzip' }),
+    body: JSON.stringify(completeBody),
   });
+  const body = await res.json().catch(() => ({}));
+  return { ok: res.ok, status: res.status, body };
 }
 
 export async function handleTool(name, args) {
@@ -661,18 +685,52 @@ export async function handleTool(name, args) {
       return `CSV source ${args.replace_source_id ? 'replaced' : 'uploaded'} (chunked, ${totalParts} parts × ${CONCURRENCY} workers): id=${src.id}, table_name="${data.table_name}", rows=${data.row_count}, cols=${(data.columns||[]).length}\nColumns: ${cols}\nJoin via Relations UI, or query directly: SELECT * FROM "${data.table_name}" LIMIT 10`;
     }
 
+    case 'dataviz_get_report_source': {
+      const data = await apiJson(`/api/reports/${encodeURIComponent(args.slug)}/source`);
+      const r = data.report || {};
+      reportSourceCache.set(args.slug, { version: r.version, content_hash: r.content_hash });
+      return `slug=${r.slug} title="${r.title}" version=${r.version} bytes=${(r.source_jsx || '').length}\n--- source_jsx ---\n${r.source_jsx || ''}`;
+    }
+
     case 'dataviz_upload_report': {
-      const data = await chunkedUploadReport(
-        args.slug,
-        args.title || args.slug,
-        args.description || '',
-        args.jsx_source,
-      );
-      const report = data.report || {};
-      const errors = data.compiled?.errors || [];
+      const slug = args.slug;
+      const cached = reportSourceCache.get(slug);
+      const baseHash = args.base_hash || cached?.content_hash || null;
+
+      const res = await chunkedUploadReport(slug, args.title || slug, args.description || '', args.jsx_source, baseHash);
+
+      if (res.status === 428 && (res.body?.code === 'BASE_HASH_REQUIRED' || res.body?.code === 'BASE_REQUIRED')) {
+        throw new Error(
+          `Refused to avoid overwriting another editor (report "${slug}" is at v${res.body.current_version}). ` +
+          `Call dataviz_get_report_source({ slug: "${slug}" }) FIRST, re-apply your change to that exact source, then retry dataviz_upload_report — ` +
+          `base_hash is then sent automatically and the server 3-way-merges concurrent edits.`
+        );
+      }
+      if (res.status === 409 && res.body?.code === 'VERSION_CONFLICT') {
+        throw new Error(
+          `Version conflict: "${slug}" moved to v${res.body.current_version} and your edit overlapped, so it can't be auto-merged. ` +
+          `Call dataviz_get_report_source({ slug: "${slug}" }) to get the current source, re-apply your change, and retry.`
+        );
+      }
+      if (res.status === 409 && res.body?.code === 'DUPLICATE_TITLE') {
+        const existing = res.body.existing || {};
+        throw new Error(
+          `Title "${args.title || slug}" already used by report "${existing.slug}" (id ${existing.id}). ` +
+          `To update it, upload with slug="${existing.slug}". To create new, choose a different title.`
+        );
+      }
+      if (!res.ok) {
+        throw new Error(`Upload failed (HTTP ${res.status}): ${res.body?.error || JSON.stringify(res.body)}`);
+      }
+
+      const report = res.body.report || {};
+      const errors = res.body.compiled?.errors || [];
       if (errors.length > 0) {
         return `Report compilation failed:\n${errors.join('\n')}`;
       }
+      // The compiled source changes server-side, so force a fresh fetch before
+      // the next edit (drop the stale base) — prevents a chained stale upload.
+      reportSourceCache.delete(slug);
       return `Report uploaded: slug="${report.slug}", version=${report.version}\nURL: ${getBaseUrl()}/report/${report.slug}`;
     }
 
