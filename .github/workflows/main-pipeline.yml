@@ -1,20 +1,17 @@
-# dataviz-plugin Main Deployment Pipeline
-#
-# Triggers:
-#   push to main                                 → build → production
-#   push to EKD-3518-iac-for-dataviz-plugin-mcp  → build → production (testing branch)
-#   manual dispatch                              → build → production
-#
-# Single-environment pipeline: dataviz-mcp only deploys to production today.
-# Staging/integration tfvars carry empty {} blocks so no infra exists in those
-# accounts to deploy to. Add environment selector here if that changes.
+# .github/workflows/main-pipeline.yml
 name: Main Deployment Pipeline
 
+# Triggers:
+#   push to main                                  → build → staging → approval → production
+#   push to EKD-3905-dataviz-staging-mcp-deployment → build → staging (testing branch)
+#   manual dispatch                               → staging
+#
+# Integration is not deployed yet (workspace-integration has dataviz_mcp = {}).
 on:
   push:
     branches:
       - main
-      - EKD-3518-iac-for-dataviz-plugin-mcp
+      - EKD-3905-dataviz-staging-mcp-deployment
     paths:
       # Server code + Dockerfile (under mcp-server/)
       - 'mcp-server/**'
@@ -24,19 +21,32 @@ on:
       # Build context / CI definitions
       - '.dockerignore'
       - '.github/workflows/**'
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target environment"
+        type: choice
+        required: true
+        options: [staging]
 
 permissions:
   id-token: write
   contents: read
+  issues: write
+  actions: read
 
 jobs:
+  # ============================================
+  # Resolve target environment
+  # ============================================
+
   setup:
-    name: Resolve Build Metadata
+    name: Resolve Environment
     runs-on: ubuntu-24.04-arm
     outputs:
+      environment: ${{ steps.env.outputs.environment }}
+      is_production: ${{ steps.env.outputs.is_production }}
       short_sha: ${{ steps.meta.outputs.short_sha }}
-      environment: production
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
@@ -44,6 +54,27 @@ jobs:
       - name: Set image metadata
         id: meta
         run: echo "short_sha=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+
+      - name: Determine environment from trigger
+        id: env
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            ENV="${{ inputs.environment }}"
+          else
+            # push to main → deploy staging first, then promote to production
+            ENV="staging"
+          fi
+          echo "environment=$ENV" >> $GITHUB_OUTPUT
+          # production flag: main branch always promotes through staging → production
+          if [ "${{ github.event_name }}" = "push" ] && [ "${{ github.ref }}" = "refs/heads/main" ]; then
+            echo "is_production=true" >> $GITHUB_OUTPUT
+          else
+            echo "is_production=false" >> $GITHUB_OUTPUT
+          fi
+
+  # ============================================
+  # Build
+  # ============================================
 
   build:
     name: Build dataviz-mcp
@@ -58,8 +89,12 @@ jobs:
     secrets:
       ECR_ROLE_ARN: ${{ secrets.ECR_ROLE_ARN }}
 
+  # ============================================
+  # Deploy to first environment (staging on push to main)
+  # ============================================
+
   deploy:
-    name: Deploy dataviz-mcp to ECS (production)
+    name: Deploy dataviz-mcp (${{ needs.setup.outputs.environment }})
     needs: [setup, build]
     uses: ./.github/workflows/deploy-ecs.yml
     with:
@@ -72,10 +107,64 @@ jobs:
       wait-for-stability: true
     secrets: inherit
 
+  # ============================================
+  # Production Approval Gate
+  # Runs only for main branch pushes (after staging deploy)
+  # ============================================
+
+  approve-for-production:
+    name: Approve for Production
+    if: needs.setup.outputs.is_production == 'true'
+    needs: [setup, deploy]
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - name: Wait for manual approval
+        uses: trstringer/manual-approval@74d99dff7380e3e4b122d4ededcbca2b6ce59367 # v1
+        with:
+          secret: ${{ github.token }}
+          approvers: ${{ github.actor }},devops-edikted,en-edikted
+          minimum-approvals: 1
+          issue-title: "Deploy to Production — ${{ github.event.head_commit.message }}"
+          issue-body: |
+            Staging deploy completed successfully. Ready to promote to **production**.
+
+            **Commit:** `${{ github.sha }}`
+            **Message:** ${{ github.event.head_commit.message }}
+            **Triggered by:** ${{ github.actor }}
+            **Run:** ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+            To approve, comment: `approved`
+            To reject, comment: `denied`
+          # Small team: the pusher can self-approve. Tighten to true when the team grows.
+          exclude-workflow-initiator-as-approver: false
+
+  # ============================================
+  # Deploy to Production (after approval)
+  # ============================================
+
+  deploy-production:
+    name: Deploy dataviz-mcp (production)
+    if: needs.setup.outputs.is_production == 'true'
+    needs: [setup, build, approve-for-production]
+    uses: ./.github/workflows/deploy-ecs.yml
+    with:
+      environment: production
+      ecs-cluster: edikted-production
+      ecs-service: edikted-dataviz-mcp-backend-production
+      task-definition-family: edikted-dataviz-mcp-backend-production
+      container-name: dataviz-mcp-backend
+      image-uri: ${{ needs.build.outputs.image_uri }}
+      wait-for-stability: true
+    secrets: inherit
+
+  # ============================================
+  # Pipeline Summary
+  # ============================================
+
   pipeline-summary:
     name: Pipeline Summary
     runs-on: ubuntu-24.04-arm
-    needs: [setup, build, deploy]
+    needs: [setup, build, deploy, deploy-production]
     if: always()
     steps:
       - name: Summary
@@ -84,9 +173,11 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Branch:** \`${{ github.ref_name }}\`" >> $GITHUB_STEP_SUMMARY
           echo "**Commit:** \`${{ needs.setup.outputs.short_sha }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "**Environment:** ${{ needs.setup.outputs.environment }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Target environment:** \`${{ needs.setup.outputs.environment }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Promote to production:** ${{ needs.setup.outputs.is_production }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Stage | Status |" >> $GITHUB_STEP_SUMMARY
           echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
-          echo "| Build & Push | ${{ needs.build.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Deploy | ${{ needs.deploy.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Build | ${{ needs.build.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Deploy (${{ needs.setup.outputs.environment }}) | ${{ needs.deploy.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Deploy (production) | ${{ needs.deploy-production.result }} |" >> $GITHUB_STEP_SUMMARY
