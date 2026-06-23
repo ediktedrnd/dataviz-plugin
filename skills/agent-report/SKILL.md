@@ -122,6 +122,36 @@ Confirm the report loads at `https://dataviz.edikted.tech/report/<slug>`. The re
 - Returns: `{ data, columns, loading, error, refresh, queryTimeMs }`
 - Raw SQL — full DuckDB syntax (DATE_TRUNC, DAYOFWEEK, window functions, CTEs, etc.)
 
+### Securing sensitive fields (field/row-level access)
+
+If a report shows data some viewers must NOT see (revenue, cost, margin, PII),
+do **not** hide it in the client alone — that is cosmetic; the value is still in
+the network payload. Use the server-enforced policy + the handshake:
+
+1. **Declare** the secured DuckDB columns + a `column → output-field` map in the
+   report's server config (`config.policy`), and register the secured table in
+   `data_access_policies` (whitelist allowed groups via `is_allow`, plus a
+   `group_id IS NULL` default-deny row for everyone else). Canonical example:
+   `backend/db/seed-products-analysis-policy.sql`.
+2. **Enforce** is automatic: `/api/extract/query-duck` NULLs the secured source
+   columns for restricted users via DuckDB shadow views, keyed to the caller's
+   identity — nothing the client sends can bypass it. Columns are NULLed in
+   place (not dropped), so existing SQL keeps working: `SUM(gross_revenue)`
+   returns NULL/0 for a restricted user, never the real value and never an error.
+3. **Reflect** in the UI with the `useFieldPolicy` hook (see
+   `field-policy-helper.jsx` in this skill). It **fails closed** (hides until the
+   policy loads / if it fails) and tells you which fields to hide — purely so
+   restricted users see a clean report instead of zeroed-out columns. No SQL
+   changes are needed for security.
+
+Inference caveat: a ratio (e.g. `% Margin = (rev-cost)/rev`) is computed from a
+secured column, so keeping it re-exposes that column. You cannot both hide
+`revenue` and keep `% Margin` in the same report — pick one.
+
+Never store access rules in a *separate* report that the JSX fetches (the old
+products-analysis pattern): if that sibling's sharing changes, enforcement
+silently flips. Policy lives on the report's own `config` + `data_access_policies`.
+
 ### Shared Components
 
 - **`DataSourceBar`** — **MANDATORY in every report.** Shows which DuckDB tables the report queries, with refresh buttons so users can trigger data syncs. Without it, users have no visibility into data freshness.
