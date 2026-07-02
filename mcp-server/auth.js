@@ -106,6 +106,45 @@ function getStdioConfig() {
   return config;
 }
 
+// ── Environment switching (local/stdio mode only) ─────────────────
+// BAs flip between prod and staging by rewriting the url in the credentials
+// file. Exposed as the dataviz_set_environment tool so nobody edits JSON by
+// hand. Cached config/token are dropped so the next call re-authenticates
+// against the new target.
+export const KNOWN_ENVIRONMENTS = {
+  prod: 'https://dataviz.edikted.tech',
+  staging: 'https://dataviz.app.staging.edikted.dev',
+};
+
+export function currentEnvironmentUrl() {
+  try {
+    const cfg = loadFromEnv() || loadFromFile();
+    if (cfg) return cfg.url;
+  } catch { /* fall through */ }
+  return DEFAULT_URL;
+}
+
+export function setEnvironment(envOrUrl) {
+  const url = KNOWN_ENVIRONMENTS[envOrUrl]
+    || (/^https:\/\//.test(envOrUrl) ? envOrUrl.replace(/\/$/, '') : null);
+  if (!url) {
+    throw new Error(`Unknown environment "${envOrUrl}". Use ${Object.keys(KNOWN_ENVIRONMENTS).join(' | ')} or a full https:// URL.`);
+  }
+  if (process.env.DATAVIZ_URL) {
+    throw new Error('DATAVIZ_URL is set in the environment and overrides the credentials file — unset it (or change it there) to switch environments.');
+  }
+  let json = {};
+  try { json = JSON.parse(readFileSync(CREDENTIALS_PATH, 'utf8')); }
+  catch (e) { if (e.code !== 'ENOENT') throw new Error(`Could not read ${CREDENTIALS_PATH}: ${e.message}`); }
+  json.url = url;
+  mkdirSync(dirname(CREDENTIALS_PATH), { recursive: true });
+  writeFileSync(CREDENTIALS_PATH, JSON.stringify(json, null, 2) + '\n', { mode: 0o600 });
+  cachedConfig = null;
+  cachedToken = null;
+  tokenExpiry = 0;
+  return url;
+}
+
 async function loginWithStoredCreds() {
   if (cachedToken && Date.now() < tokenExpiry - 300_000) {
     return cachedToken;

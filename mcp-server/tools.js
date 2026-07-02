@@ -2,7 +2,8 @@
  * Tool definitions and handlers for the Dataviz MCP server.
  * Each tool wraps a Dataviz API call and returns structured results.
  */
-import { apiJson, apiFetch, getBaseUrl, getToken } from './auth.js';
+import { apiJson, apiFetch, getBaseUrl, getToken, setEnvironment, currentEnvironmentUrl, KNOWN_ENVIRONMENTS } from './auth.js';
+import { getRequestContext } from './context.js';
 import { readResource } from './resources.js';
 
 // Cache last-fetched report source per slug so dataviz_upload_report can send
@@ -319,6 +320,17 @@ export const TOOLS = [
       required: ['to'],
     },
   },
+  {
+    name: 'dataviz_set_environment',
+    description: 'Switch which Dataviz environment every dataviz_* tool targets: "prod", "staging", or a full https:// base URL. Persists to the local credentials file and re-authenticates on the next call. Local plugin only (no-op on the remote MCP).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        environment: { type: 'string', description: '"prod", "staging", or a full https:// base URL' },
+      },
+      required: ['environment'],
+    },
+  },
 ];
 
 // ── Tool Handlers ──────────────────────────────────────────────
@@ -377,6 +389,20 @@ async function chunkedUploadReport(slug, title, description, jsxSource, baseHash
 
 export async function handleTool(name, args) {
   switch (name) {
+    case 'dataviz_set_environment': {
+      if (getRequestContext()) {
+        throw new Error('dataviz_set_environment is only available in the local plugin — the remote MCP is pinned to one environment.');
+      }
+      const url = setEnvironment(args.environment);
+      // Prove the switch works end-to-end: authenticate + touch a cheap endpoint.
+      try {
+        const tables = await apiJson('/api/extract/tables');
+        const n = (tables.tables || []).filter((t) => t.table_name.startsWith('query_')).length;
+        return `Now targeting ${url} — authenticated OK, ${n} data tables visible.`;
+      } catch (e) {
+        return `Now targeting ${url}, but the verification call failed: ${e.message}\nIf this is a credentials problem, update email/password in the credentials file. Switch back with dataviz_set_environment("prod").`;
+      }
+    }
     case 'dataviz_read_context': {
       if (!args.uri || typeof args.uri !== 'string') {
         throw new Error('uri is required (e.g. "dataviz://context/kpis.md")');
