@@ -39,27 +39,43 @@ Explore every relevant table — understand columns, data types, row counts, and
 
 ### Step 1b — Creating NEW data sources / extract queries for a report
 
-A report reads DuckDB tables (`query_<id>_<name>`), and each table is produced by an
-extract query that must be owned by a **canvas dashboard** (platform constraint —
-reports cannot own queries). When your report needs a table that doesn't exist yet:
+A report reads DuckDB tables (`query_<id>_<name>`). When your report needs a table
+that doesn't exist yet, create the source **with its SQL inline** — one call, and
+**no dashboard is created anywhere**:
 
-1. Create ONE holder dashboard per report, titled **`[PIPELINE] <report-slug>`**
-   (e.g. `[PIPELINE] daily-sales`), description: *"Holder for the extract queries
-   feeding /report/<slug>. Do not delete — deleting breaks the report's data refresh."*
-   Reuse it for all of the report's queries; never create per-query dashboards.
-2. Create the data source(s) + queries under that dashboard (1 postgres source = 1 query,
-   enforced server-side), then extract.
-3. NEVER delete a `[PIPELINE] …` dashboard, and never delete any dashboard that
-   "looks unused" without checking lineage first:
-   - `GET /api/lineage/dashboard/:id` — which sources/tables this dashboard involves
-   - `GET /api/lineage/source/:id` — every dashboard AND report consuming a source
-   - `GET /api/lineage/table/:name` — who reads one DuckDB table (with 30-day usage)
-   - `GET /api/lineage/report/:slug` — the sources feeding a report (`source_ids` is
-     ready for `POST /api/extract/source/:id` refresh loops)
-   The platform blocks dashboard deletes whose tables other consumers still read
-   (409 `DASHBOARD_HAS_DEPENDENTS`); on `force=true` the affected extract queries are
-   re-homed to `[PIPELINE] Retained extract queries` instead of being destroyed —
-   but don't rely on force; check lineage and talk to the owner.
+```
+POST /api/sources
+{
+  "name": "influencers_kpi_v2",          // becomes the query/table name too
+  "type": "postgresql",
+  "connection_id": 2,                     // reuse the shared prod connection
+  "schedule": "24h",
+  "sql": "SELECT ... FROM edktd_history....",
+  "query_name": "optional_override"       // optional; defaults to name
+}
+→ { source, query, duckdb_table }         // put duckdb_table in your report's SQL
+```
+
+Then refresh: `POST /api/extract/source/:id` (or `dataviz_extract_source`) and the
+table is queryable. Manage the query later via:
+- `GET | PUT | DELETE /api/sources/:id/query` — PUT updates `sql_text` / incremental
+  settings; the **name is immutable** (it is baked into the DuckDB table name).
+- 1 postgres source = 1 query is enforced (409 `QUERY_PER_SOURCE_LIMIT`) — one more
+  table means one more source (same `connection_id` is fine).
+
+Deleting things — ALWAYS check lineage first:
+- `GET /api/lineage/source/:id` — every dashboard AND report consuming a source
+- `GET /api/lineage/table/:name` — who reads one DuckDB table (with 30-day usage)
+- `GET /api/lineage/report/:slug` — the sources feeding a report (`source_ids` is
+  ready for `POST /api/extract/source/:id` refresh loops)
+- `GET /api/lineage/dashboard/:id` — which sources/tables a dashboard involves
+Deletes are guarded server-side: source/query deletes 409 while reports or dashboards
+still consume their tables; dashboard force-deletes re-home affected extract queries
+to `[PIPELINE] Retained extract queries` instead of destroying them.
+
+**Legacy note:** pipelines created before 2026-07 are owned by canvas dashboards
+(often titled `[PIPELINE] …`). Never delete those without checking lineage. New
+pipelines must NOT create holder dashboards — use the inline-`sql` flow above.
 
 ### Step 2 — Design the dashboard
 

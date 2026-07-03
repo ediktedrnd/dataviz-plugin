@@ -186,7 +186,7 @@ export const TOOLS = [
   },
   {
     name: 'dataviz_create_source',
-    description: 'Create a new data source. Two modes:\n\n1. REUSE AN EXISTING CONNECTION (preferred, no credentials in chat): pass `connection_id` from dataviz_list_connections plus `name`, `type` (must match the connection\'s type), and optional `schedule` / `business_context`. Leave `config` empty — the extract pipeline reads creds fresh from the connection on each run, so password rotations cascade automatically.\n\n2. INLINE CREDENTIALS: pass full `config`. For type="postgresql": {host, port, database, user, password, ssl?}. For type="ga4" with env defaults configured (GA4_PROPERTY_ID + GA4_SERVICE_ACCOUNT_KEY_FILE), pass config={}; for per-source GA4 override: {propertyId, serviceAccountKey}.\n\nReturns the new source id.',
+    description: 'Create a new data source. Two modes:\n\n1. REUSE AN EXISTING CONNECTION (preferred, no credentials in chat): pass `connection_id` from dataviz_list_connections plus `name`, `type` (must match the connection\'s type), and optional `schedule` / `business_context`. Leave `config` empty — the extract pipeline reads creds fresh from the connection on each run, so password rotations cascade automatically.\n\n2. INLINE CREDENTIALS: pass full `config`. For type="postgresql": {host, port, database, user, password, ssl?}. For type="ga4" with env defaults configured (GA4_PROPERTY_ID + GA4_SERVICE_ACCOUNT_KEY_FILE), pass config={}; for per-source GA4 override: {propertyId, serviceAccountKey}.\n\nPIPELINE MODE (preferred for agent reports): also pass `sql` — the extract query is created in the SAME call as a standalone query owned by the source (NO dashboard involved), and the response includes the DuckDB table name to use in the report. Then run dataviz_extract_source to materialize it.\n\nReturns the new source id (+ query id and duckdb_table in pipeline mode).',
     inputSchema: {
       type: 'object',
       properties: {
@@ -196,6 +196,8 @@ export const TOOLS = [
         config: { type: 'object', description: 'Source-specific config (only when connection_id is NOT set). Empty {} for env-default GA4. PG: {host, port, database, user, password}. GA4 override: {propertyId, serviceAccountKey}.' },
         schedule: { type: 'string', description: 'Refresh schedule: none / 5m / 15m / 1h / 6h / 24h or raw cron. Default none. GA4 sources should stay at 24h to respect property quotas.' },
         business_context: { type: 'string', description: 'Optional human-readable note explaining what this source is for.' },
+        sql: { type: 'string', description: 'Optional (postgresql/ga4). Extract SQL — creates a standalone pipeline query with the source in one call, no dashboard needed. Response includes the DuckDB table name.' },
+        query_name: { type: 'string', description: 'Optional query name override for pipeline mode (defaults to source name; letters/numbers/underscores/hyphens/spaces only — it becomes part of the DuckDB table name).' },
       },
       required: ['name', 'type'],
     },
@@ -225,13 +227,14 @@ export const TOOLS = [
   },
   {
     name: 'dataviz_update_query',
-    description: 'Update an existing dashboard query — name, SQL, or incremental config. Pass only the fields you want to change. Pass `incremental: { enabled: false }` to clear incremental mode.',
+    description: 'Update an existing query — name, SQL, or incremental config. Pass only the fields you want to change. Pass `incremental: { enabled: false }` to clear incremental mode.\n\nTwo addressing modes:\n1. Dashboard-owned query: pass `dashboard_id` + `query_id`.\n2. STANDALONE pipeline query (created via dataviz_create_source with `sql`): pass `source_id` only — updates the source\'s single query. Name is immutable in this mode (it is baked into the DuckDB table name).',
     inputSchema: {
       type: 'object',
       properties: {
-        dashboard_id: { type: 'number', description: 'Dashboard ID that owns the query' },
-        query_id:     { type: 'number', description: 'Query ID to update' },
-        name:         { type: 'string', description: 'New query name (optional)' },
+        dashboard_id: { type: 'number', description: 'Dashboard ID that owns the query (mode 1)' },
+        query_id:     { type: 'number', description: 'Query ID to update (mode 1)' },
+        source_id:    { type: 'number', description: 'Source ID whose standalone query to update (mode 2 — omit dashboard_id/query_id)' },
+        name:         { type: 'string', description: 'New query name (optional; mode 1 only)' },
         sql_text:     { type: 'string', description: 'New SQL text (optional)' },
         incremental:  {
           type: 'object',
@@ -243,7 +246,6 @@ export const TOOLS = [
           },
         },
       },
-      required: ['dashboard_id', 'query_id'],
     },
   },
   {
@@ -550,13 +552,18 @@ export async function handleTool(name, args) {
       };
       if (args.connection_id != null) body.connection_id = args.connection_id;
       if (args.business_context) body.business_context = args.business_context;
+      if (args.sql != null) body.sql = args.sql;
+      if (args.query_name) body.query_name = args.query_name;
       const data = await apiJson('/api/sources', {
         method: 'POST',
         body: JSON.stringify(body),
       });
       const src = data.source || data;
       const connLine = src.connection_id ? `, connection_id=${src.connection_id}` : '';
-      return `Source created: id=${src.id}, name="${src.name}", type=${src.type}, schedule=${src.schedule || 'none'}${connLine}`;
+      const pipeLine = data.duckdb_table
+        ? `\nStandalone pipeline query: id=${data.query.id} (no dashboard)\nOutput DuckDB table: ${data.duckdb_table}\nRun dataviz_extract_source({ source_id: ${src.id} }) to materialize it.`
+        : '';
+      return `Source created: id=${src.id}, name="${src.name}", type=${src.type}, schedule=${src.schedule || 'none'}${connLine}${pipeLine}`;
     }
 
     case 'dataviz_create_query': {
@@ -585,9 +592,28 @@ export async function handleTool(name, args) {
     }
 
     case 'dataviz_update_query': {
-      const { dashboard_id, query_id, name, sql_text, incremental } = args;
+      const { dashboard_id, query_id, source_id, name, sql_text, incremental } = args;
+
+      // Mode 2 — standalone pipeline query, addressed by its source.
+      if (source_id != null && !dashboard_id && !query_id) {
+        const body = {};
+        if (sql_text !== undefined) body.sql_text = sql_text;
+        if (incremental !== undefined && incremental !== null) {
+          body.incremental_enabled = !!incremental.enabled;
+          if (incremental.column !== undefined) body.incremental_column = incremental.column;
+          if (incremental.lookback_days !== undefined) body.incremental_lookback_days = incremental.lookback_days;
+        }
+        if (incremental === null) body.incremental_enabled = false;
+        const data = await apiJson(`/api/sources/${source_id}/query`, {
+          method: 'PUT',
+          body: JSON.stringify(body),
+        });
+        const q = data.query || {};
+        return `Standalone query ${q.id} updated (source ${source_id}). DuckDB table: ${data.duckdb_table}. Run dataviz_extract_source({ source_id: ${source_id} }) to re-materialize.`;
+      }
+
       if (!dashboard_id || !query_id) {
-        throw new Error('dashboard_id and query_id are required');
+        throw new Error('Pass dashboard_id + query_id (dashboard-owned) OR source_id alone (standalone pipeline query)');
       }
       const body = {};
       if (name !== undefined) body.name = name;
