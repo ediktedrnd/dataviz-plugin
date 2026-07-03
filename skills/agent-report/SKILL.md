@@ -37,6 +37,30 @@ dataviz_query { sql: "SELECT * FROM <table> LIMIT 5" }
 
 Explore every relevant table — understand columns, data types, row counts, and sample data before designing.
 
+### Step 1b — Creating NEW data sources / extract queries for a report
+
+A report reads DuckDB tables (`query_<id>_<name>`), and each table is produced by an
+extract query that must be owned by a **canvas dashboard** (platform constraint —
+reports cannot own queries). When your report needs a table that doesn't exist yet:
+
+1. Create ONE holder dashboard per report, titled **`[PIPELINE] <report-slug>`**
+   (e.g. `[PIPELINE] daily-sales`), description: *"Holder for the extract queries
+   feeding /report/<slug>. Do not delete — deleting breaks the report's data refresh."*
+   Reuse it for all of the report's queries; never create per-query dashboards.
+2. Create the data source(s) + queries under that dashboard (1 postgres source = 1 query,
+   enforced server-side), then extract.
+3. NEVER delete a `[PIPELINE] …` dashboard, and never delete any dashboard that
+   "looks unused" without checking lineage first:
+   - `GET /api/lineage/dashboard/:id` — which sources/tables this dashboard involves
+   - `GET /api/lineage/source/:id` — every dashboard AND report consuming a source
+   - `GET /api/lineage/table/:name` — who reads one DuckDB table (with 30-day usage)
+   - `GET /api/lineage/report/:slug` — the sources feeding a report (`source_ids` is
+     ready for `POST /api/extract/source/:id` refresh loops)
+   The platform blocks dashboard deletes whose tables other consumers still read
+   (409 `DASHBOARD_HAS_DEPENDENTS`); on `force=true` the affected extract queries are
+   re-homed to `[PIPELINE] Retained extract queries` instead of being destroyed —
+   but don't rely on force; check lineage and talk to the owner.
+
 ### Step 2 — Design the dashboard
 
 Think like a **senior frontend developer and data analyst**:
