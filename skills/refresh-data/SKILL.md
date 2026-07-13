@@ -11,6 +11,7 @@ Trigger a data source extract (PostgreSQL → DuckDB) and monitor completion.
 1. **List sources** — Use `dataviz_list_sources` to show available data sources with IDs and schedules.
 
 2. **Trigger extract** — Use `dataviz_extract_source` with the source ID. This returns immediately with a `runId`.
+   - **Shared/hourly sources**: pass `skip_if_fresh_minutes` (e.g. `55` for hourly-refreshed sources) when the source is already refreshed by another schedule (hourly cron, products-analysis DAG). If the last successful extract completed inside that window — or a run is in progress right now — the backend skips the redundant extract and returns `skipped: true` with `lastRefreshedAt`. Treat that as success; no polling needed. Omit the parameter to always extract.
 
 3. **Poll for completion** — Use `dataviz_extract_status` every 30 seconds until the run shows `status: "success"` or `"error"`.
 

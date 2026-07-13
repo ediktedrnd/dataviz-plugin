@@ -138,11 +138,12 @@ export const TOOLS = [
   },
   {
     name: 'dataviz_extract_source',
-    description: 'Trigger a data source extract (refresh from PostgreSQL to DuckDB). Returns immediately with a runId — use dataviz_extract_status to poll for completion.',
+    description: 'Trigger a data source extract (refresh from PostgreSQL to DuckDB). Returns immediately with a runId — use dataviz_extract_status to poll for completion. Optional skip_if_fresh_minutes: when the source already had a successful extract within that window (e.g. it is on an hourly cron shared with another pipeline), the backend skips the redundant run and returns { skipped: true, reason: "fresh"|"in_progress", lastRefreshedAt } instead of a runId.',
     inputSchema: {
       type: 'object',
       properties: {
         source_id: { type: 'number', description: 'Data source ID to extract' },
+        skip_if_fresh_minutes: { type: 'number', description: 'Optional. Skip the extract if the last successful run completed within this many minutes (also skips when a run is already in progress); response then has skipped:true + lastRefreshedAt. Omit to always extract.' },
       },
       required: ['source_id'],
     },
@@ -504,9 +505,17 @@ export async function handleTool(name, args) {
     }
 
     case 'dataviz_extract_source': {
+      const body = {};
+      if (args.skip_if_fresh_minutes != null) body.skipIfFreshMinutes = args.skip_if_fresh_minutes;
       const data = await apiJson(`/api/extract/source/${args.source_id}`, {
         method: 'POST',
+        ...(Object.keys(body).length ? { body: JSON.stringify(body) } : {}),
       });
+      if (data.skipped) {
+        return data.reason === 'in_progress'
+          ? `Extract skipped: a run is already in progress (runId=${data.runId}, started ${data.startedAt}).`
+          : `Extract skipped: source ${args.source_id} is fresh — last successful refresh ${data.lastRefreshedAt} (${data.ageMinutes} min ago, window ${data.skipIfFreshMinutes} min). runId=${data.runId}`;
+      }
       return `Extract triggered: runId=${data.runId}, status=${data.status}\n${data.message || ''}`;
     }
 
