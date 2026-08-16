@@ -1,6 +1,6 @@
 {
   "name": "dataviz-toolkit",
-  "version": "1.0.0",
+  "version": "1.2.0",
   "description": "Edikted Dataviz platform tools — create dashboards, query data, refresh sources, deploy reports, send PDF emails",
   "author": {
     "name": "Edikted Data Team",
@@ -8,5 +8,11 @@
   },
   "repository": "https://github.com/ediktedrnd/dataviz-plugin",
   "license": "PROPRIETARY",
-  "keywords": ["dataviz", "dashboards", "duckdb", "analytics", "edikted"]
+  "keywords": [
+    "dataviz",
+    "dashboards",
+    "duckdb",
+    "analytics",
+    "edikted"
+  ]
 }
