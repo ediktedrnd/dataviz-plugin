@@ -192,6 +192,41 @@ Never store access rules in a *separate* report that the JSX fetches (the old
 products-analysis pattern): if that sibling's sharing changes, enforcement
 silently flips. Policy lives on the report's own `config` + `data_access_policies`.
 
+### Tabs the host can hide or restrict (REQUIRED for multi-tab reports)
+
+The platform owns tab visibility. ReportPage renders a "Tab visibility" panel
+(editors only) that lets admins hide a tab from all viewers or **restrict it to
+security groups**; the settings live in `agent_reports.config`
+(`hiddenTabs: [...]`, `tabAccess: { tabId: [groupId, …] }`) and the server folds
+them per caller into `effective_hidden_tabs`. **None of it works unless the
+report implements the contract** — the panel shows "This report doesn't expose
+any toggleable tabs" and hiding does nothing. Every report with top-level tabs
+must:
+
+```jsx
+export default function MyReport({ tabControl } = {}) {
+  const TABS = [{ id: 'overview', label: 'Overview' }, { id: 'detail', label: 'Detail' }];
+  const hiddenTabs = tabControl?.hiddenTabs || [];      // THIS user's hidden set (server-computed)
+  const canManageTabs = !!tabControl?.canManage;         // editors see everything, marked 🚫
+  const visibleTabs = canManageTabs ? TABS : TABS.filter(t => !hiddenTabs.includes(t.id));
+  useEffect(() => { tabControl?.register?.(TABS); }, []); // tell the host which tabs exist
+  useEffect(() => {                                        // bounce off a hidden active tab
+    if (canManageTabs || !hiddenTabs.includes(tab)) return;
+    const first = TABS.find(t => !hiddenTabs.includes(t.id));
+    if (first) setTab(first.id);
+  }, [tab, hiddenTabs, canManageTabs]);
+  // render visibleTabs; label: {t.label}{canManageTabs && hiddenTabs.includes(t.id) ? ' 🚫' : ''}
+}
+```
+
+Tab restriction is **presentation scoping**, not data security. If a restricted
+tab shows cross-entity data (all stores, all suppliers…), pair it with row
+filters on the tables it reads (`data_access_policies`, see
+`backend/src/security/store-group-permissions.js` for the per-store pattern) so
+a viewer who forges `?tab=` still only gets their own rows. Also derive any
+entity selector (store picker) from a policy-scoped query, not a static list,
+and clamp the current selection to what came back.
+
 ### Shared Components
 
 - **`DataSourceBar`** — **MANDATORY in every report.** Shows which DuckDB tables the report queries, with refresh buttons so users can trigger data syncs. Without it, users have no visibility into data freshness.
