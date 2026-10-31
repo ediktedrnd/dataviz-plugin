@@ -1,0 +1,77 @@
+# dataviz-plugin Finance Deployment
+#
+# Manual deploy of the dispatched ref to the dedicated finance MCP server
+# (finance AWS account, dataviz.mcp.finance.edikted.dev). Every job runs in
+# the `finance` GitHub environment, which carries ECS_DEPLOY_ROLE_ARN.
+name: Deploy Finance
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: deploy-finance
+  cancel-in-progress: false
+
+jobs:
+  setup:
+    name: Resolve Build Metadata
+    runs-on: ubuntu-24.04-arm
+    outputs:
+      short_sha: ${{ steps.meta.outputs.short_sha }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Set image metadata
+        id: meta
+        run: echo "short_sha=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build dataviz-mcp
+    needs: setup
+    uses: ./.github/workflows/build-push-ecr.yml
+    with:
+      dockerfile: ./mcp-server/Dockerfile
+      ecr-repository: edikted-dataviz-mcp-backend
+      environment: finance
+      build-context: .
+      image-tag: ${{ needs.setup.outputs.short_sha }}
+    secrets:
+      ECR_ROLE_ARN: ${{ secrets.ECR_ROLE_ARN }}
+
+  deploy:
+    name: Deploy dataviz-mcp to ECS (finance)
+    needs: build
+    uses: ./.github/workflows/deploy-ecs.yml
+    with:
+      environment: finance
+      ecs-cluster: edikted-finance
+      ecs-service: edikted-dataviz-mcp-backend-finance
+      task-definition-family: edikted-dataviz-mcp-backend-finance
+      container-name: dataviz-mcp-backend
+      image-uri: ${{ needs.build.outputs.image_uri }}
+      wait-for-stability: true
+    secrets: inherit
+
+  summary:
+    name: Summary
+    runs-on: ubuntu-24.04-arm
+    needs: [setup, build, deploy]
+    if: always()
+    steps:
+      - name: Summary
+        run: |
+          {
+            echo "## dataviz-mcp Finance Deployment"
+            echo ""
+            echo "**Ref:** \`${{ github.ref_name }}\` (\`${{ needs.setup.outputs.short_sha }}\`)"
+            echo ""
+            echo "| Stage | Status |"
+            echo "|-------|--------|"
+            echo "| Build & Push | ${{ needs.build.result }} |"
+            echo "| Deploy | ${{ needs.deploy.result }} |"
+          } >> "$GITHUB_STEP_SUMMARY"
