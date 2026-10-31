@@ -1,8 +1,10 @@
 # dataviz-plugin Finance Deployment
 #
-# Manual deploy of the dispatched ref to the dedicated finance MCP server
-# (finance AWS account, dataviz.mcp.finance.edikted.dev). Every job runs in
-# the `finance` GitHub environment, which carries ECS_DEPLOY_ROLE_ARN.
+# Manual deploy to the dedicated finance MCP server (finance AWS account,
+# dataviz.mcp.finance.edikted.dev), run from main or a vX.Y.Z / vX.Y.Z-rc.N tag
+# whose commit is on main. One approval on the finance-approval environment
+# gates the run; the build and deploy jobs then run in the finance environment,
+# which carries ECS_DEPLOY_ROLE_ARN.
 name: Deploy Finance
 
 on:
@@ -17,35 +19,106 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  setup:
-    name: Resolve Build Metadata
+  check:
+    name: Check
     runs-on: ubuntu-24.04-arm
     outputs:
-      short_sha: ${{ steps.meta.outputs.short_sha }}
+      short_sha: ${{ steps.ref.outputs.short_sha }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - name: Require main or a release tag on main
+        id: ref
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          REF: ${{ github.ref }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          case "$REF" in
+            refs/heads/main) ;;
+            refs/tags/v*)
+              [[ "${REF#refs/tags/}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$ ]] || { echo "::error::tag must be vX.Y.Z or vX.Y.Z-rc.N, got ${REF#refs/tags/}"; exit 1; }
+              status="$(gh api "repos/$REPO/compare/main...$SHA" --jq .status)"
+              [[ "$status" =~ ^(behind|identical)$ ]] || { echo "::error::${REF#refs/tags/} ($SHA) is not on main ($status)"; exit 1; }
+              ;;
+            *)
+              echo "::error::run Deploy Finance from main or a release tag, got $REF"
+              exit 1
+              ;;
+          esac
+          echo "short_sha=${SHA:0:7}" >> "$GITHUB_OUTPUT"
+          echo "Deploying ${REF#refs/*/} ($SHA) to finance" >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Set image metadata
-        id: meta
-        run: echo "short_sha=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+  approve:
+    name: Approve
+    needs: check
+    runs-on: ubuntu-24.04-arm
+    environment: finance-approval
+    permissions: {}
+    steps:
+      - name: Approved
+        env:
+          REF: ${{ github.ref_name }}
+          SHA: ${{ github.sha }}
+        run: echo "$REF ($SHA) approved"
+
+  image:
+    name: Resolve Image
+    needs: [check, approve]
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      id-token: write
+      contents: read
+    outputs:
+      exists: ${{ steps.find.outputs.exists }}
+      uri: ${{ steps.find.outputs.uri }}
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@8df5847569e6427dd6c4fb1cf565c83acfa8afa7 # v6.0.0
+        with:
+          role-to-assume: ${{ secrets.ECR_ROLE_ARN }}
+          role-session-name: github-actions-${{ github.run_id }}-resolve
+          aws-region: us-east-1
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@f2e9fc6c2b355c1890b65e6f6f0e2ac3e6e22f78 # v2
+
+      # ECR tags are immutable: an image already built for this commit is reused, not rebuilt.
+      - name: Find the image
+        id: find
+        env:
+          REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          REPO: edikted-dataviz-mcp-backend
+          TAG: ${{ needs.check.outputs.short_sha }}
+        run: |
+          set -euo pipefail
+          echo "uri=$REGISTRY/$REPO:$TAG" >> "$GITHUB_OUTPUT"
+          if aws ecr describe-images --repository-name "$REPO" --image-ids "imageTag=$TAG" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "Reusing $REPO:$TAG" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
 
   build:
     name: Build dataviz-mcp
-    needs: setup
+    needs: [check, image]
+    if: ${{ needs.image.outputs.exists != 'true' }}
     uses: ./.github/workflows/build-push-ecr.yml
     with:
       dockerfile: ./mcp-server/Dockerfile
       ecr-repository: edikted-dataviz-mcp-backend
       environment: finance
       build-context: .
-      image-tag: ${{ needs.setup.outputs.short_sha }}
+      image-tag: ${{ needs.check.outputs.short_sha }}
     secrets:
       ECR_ROLE_ARN: ${{ secrets.ECR_ROLE_ARN }}
 
   deploy:
     name: Deploy dataviz-mcp to ECS (finance)
-    needs: build
+    needs: [image, build]
+    if: ${{ !cancelled() && needs.image.result == 'success' && (needs.build.result == 'success' || needs.build.result == 'skipped') }}
     uses: ./.github/workflows/deploy-ecs.yml
     with:
       environment: finance
@@ -53,14 +126,14 @@ jobs:
       ecs-service: edikted-dataviz-mcp-backend-finance
       task-definition-family: edikted-dataviz-mcp-backend-finance
       container-name: dataviz-mcp-backend
-      image-uri: ${{ needs.build.outputs.image_uri }}
+      image-uri: ${{ needs.image.outputs.uri }}
       wait-for-stability: true
     secrets: inherit
 
   summary:
     name: Summary
     runs-on: ubuntu-24.04-arm
-    needs: [setup, build, deploy]
+    needs: [check, approve, image, build, deploy]
     if: always()
     steps:
       - name: Summary
@@ -68,10 +141,29 @@ jobs:
           {
             echo "## dataviz-mcp Finance Deployment"
             echo ""
-            echo "**Ref:** \`${{ github.ref_name }}\` (\`${{ needs.setup.outputs.short_sha }}\`)"
+            echo "**Ref:** \`${{ github.ref_name }}\` (\`${{ needs.check.outputs.short_sha }}\`)"
             echo ""
             echo "| Stage | Status |"
             echo "|-------|--------|"
+            echo "| Check | ${{ needs.check.result }} |"
+            echo "| Approve | ${{ needs.approve.result }} |"
             echo "| Build & Push | ${{ needs.build.result }} |"
             echo "| Deploy | ${{ needs.deploy.result }} |"
           } >> "$GITHUB_STEP_SUMMARY"
+
+  # Posts every outcome to the release-notifications channel; never fails the run.
+  notify-slack:
+    name: Notify Slack
+    runs-on: ubuntu-24.04-arm
+    needs: [check, approve, image, build, deploy]
+    if: always()
+    continue-on-error: true
+    steps:
+      - name: Post the outcome
+        uses: ediktedrnd/edikted-actions/notify/slack@v2
+        with:
+          webhook_url: ${{ secrets.SLACK_DEPLOY_WEBHOOK_URL }}
+          results: >-
+            ${{ needs.check.result }} ${{ needs.approve.result }} ${{ needs.image.result }} ${{ needs.build.result }} ${{ needs.deploy.result }}
+          title: Dataviz MCP finance deploy
+          notify_on: always
