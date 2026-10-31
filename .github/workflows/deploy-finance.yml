@@ -152,6 +152,8 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
   # Posts every outcome to the release-notifications channel; never fails the run.
+  # Inline rather than edikted-actions notify/slack: this repository is public and
+  # cannot use actions from the private edikted-actions repository.
   notify-slack:
     name: Notify Slack
     runs-on: ubuntu-24.04-arm
@@ -160,10 +162,29 @@ jobs:
     continue-on-error: true
     steps:
       - name: Post the outcome
-        uses: ediktedrnd/edikted-actions/notify/slack@v2
-        with:
-          webhook_url: ${{ secrets.SLACK_DEPLOY_WEBHOOK_URL }}
-          results: >-
-            ${{ needs.check.result }} ${{ needs.approve.result }} ${{ needs.image.result }} ${{ needs.build.result }} ${{ needs.deploy.result }}
-          title: Dataviz MCP finance deploy
-          notify_on: always
+        env:
+          WEBHOOK_URL: ${{ secrets.SLACK_DEPLOY_WEBHOOK_URL }}
+          RESULTS: ${{ needs.check.result }} ${{ needs.approve.result }} ${{ needs.image.result }} ${{ needs.build.result }} ${{ needs.deploy.result }}
+          REF: ${{ github.ref_name }}
+          SHA: ${{ github.sha }}
+          ACTOR: ${{ github.triggering_actor }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          if [ -z "${WEBHOOK_URL:-}" ]; then
+            echo "SLACK_DEPLOY_WEBHOOK_URL is not set; skipping"
+            exit 0
+          fi
+          status=success
+          for r in $RESULTS; do
+            if [ "$r" = failure ]; then status=failure; break; fi
+            if [ "$r" = cancelled ]; then status=cancelled; fi
+          done
+          case "$status" in
+            success)   icon=":white_check_mark:" ;;
+            cancelled) icon=":warning:" ;;
+            *)         icon=":x:" ;;
+          esac
+          text="$icon *Dataviz MCP finance deploy*: $status - \`$REF\` (\`${SHA:0:7}\`) by $ACTOR - <$RUN_URL|View run>"
+          jq -n --arg text "$text" '{text: $text}' \
+            | curl -fsS -X POST -H 'Content-Type: application/json' --data @- "$WEBHOOK_URL" >/dev/null
