@@ -19,7 +19,7 @@ This is the **Finance Dataviz** (FP&A) at `https://dataviz.app.finance.edikted.d
 - Login missing or failing → `dataviz://skill/finance-setup/SKILL.md`
 
 ## Before any query
-Read `dataviz://context/data-sources.md` (NetSuite P&L tables, grain, gotchas) and `dataviz://context/kpis.md` (sign convention, P&L lines), then pass both URIs in `acknowledged_context_read`.
+Read `dataviz://context/data-sources.md` (the `query_1_netsuite_pnl` table, grain, intercompany, gotchas) and `dataviz://context/kpis.md` (sign convention, P&L sections, reconciliation anchors), then pass both URIs in `acknowledged_context_read`.
 
 ## Reference
 - Tables + columns: `dataviz://context/data-sources.md`

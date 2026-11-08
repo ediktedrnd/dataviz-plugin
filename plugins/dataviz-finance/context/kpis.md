@@ -1,28 +1,40 @@
 # Finance KPI Definitions — NetSuite P&L
 
-## Sign convention (read first)
-- `amount` (and `amount_gl` in `pnl_fpa_view`) is the GL amount: **debit − credit**. Income accounts are credits, so their `amount` is **negative**; expense accounts are positive.
-- `"Amount"` in `pnl_fpa_view` is **report convention**: `-amount` for `Income` / `OthIncome`, `amount` otherwise — so revenue and expenses both show positive.
-- Pick one convention per widget and say which in the title or tooltip. Don't mix `"Amount"` and `amount` in one formula.
+All queries run on `query_1_netsuite_pnl` (see `data-sources.md`).
 
-## P&L lines (GL convention, from `pnl_transactions`)
+## Sign convention (read first)
+- `amount` is the GL amount: **debit − credit**. Income is a credit, so income `amount` is **negative**; expenses are positive.
+- `report_amount` is **report convention**: `-amount` for `Income` / `OthIncome`, `amount` otherwise — revenue and expenses both positive.
+- Pick one convention per widget and say which. Don't mix them in one formula.
+
+## P&L sections
+```sql
+CASE
+  WHEN account_type = 'Income' THEN 'rev'                                     -- revenues, refunds, deferred revenue
+  WHEN account_type = 'Expense' AND split_part(account_name, ' : ', 1) = 'Cost Of Revenues' THEN 'cor'
+  WHEN account_type = 'Expense' AND split_part(account_name, ' : ', 1)
+       IN ('Bank & Finance expenses', 'Income Tax expenses') THEN 'below'
+  WHEN account_type = 'Expense' THEN 'opex'
+  ELSE 'below' END                                                            -- OthIncome / OthExpense
+```
+
 | Line | Formula |
 |---|---|
-| Revenue | `-SUM(amount) FILTER (WHERE account_type = 'Income')` |
-| Operating expenses (incl. cost of sales) | `SUM(amount) FILTER (WHERE account_type = 'Expense')` |
-| Other income | `-SUM(amount) FILTER (WHERE account_type = 'OthIncome')` |
-| Other expense | `SUM(amount) FILTER (WHERE account_type = 'OthExpense')` |
-| Net income | `-SUM(amount)` over all rows |
-| Expense ratio | `Operating expenses / NULLIF(Revenue, 0)` |
+| Net revenue | `-SUM(amount)` where section = `rev` (after refunds and deferrals) |
+| Cost of revenues | `SUM(amount)` where section = `cor` |
+| Gross profit | Net revenue − Cost of revenues |
+| Operating expenses | `SUM(amount)` where section = `opex` |
+| Operating income | Gross profit − Operating expenses |
+| Other expense / (income), finance & tax | `SUM(amount)` where section = `below` |
+| **Net income** | `-SUM(amount)` over all rows (= operating income − below the line) |
+| Margins | line / `NULLIF(net revenue, 0)` |
 
-- There is no `COGS` account type in this extract — gross profit and gross margin need FP&A's list of cost-of-sales accounts (by `account_number`). Ask for it; don't guess from account names.
-- Group months by `period_start` / `posting_period`, not `trandate`.
+**Preliminary**: the gross-profit split ("Cost Of Revenues" group) and intercompany handling are still to be confirmed with FP&A. Label them as such.
 
-## Reconciliation anchors
-Use these to sanity-check a query before publishing a dashboard (all posting lines, primary book, P&L accounts):
+## Periods
+- Group by `period_start` / `posting_period`, never `trandate`.
+- YTD and year-over-year: complete months only. Last complete month = max month of the year, minus 1 if that month is the month of `MAX(loaded_at)`.
+- Prior-year comparison = the same months of `fiscal_year - 1`.
 
-| Fiscal year | Rows | Total debit | Total credit |
-|---|---|---|---|
-| 2025 (frozen) | 36,298 | 1,201,571,458.28 | 1,294,198,780.64 |
-
-FY2025 matched FP&A's own NetSuite export to the cent. For the open year, compare against the latest `loaded` row in `netsuite.load_runs`.
+## Reconciliation
+FY2025 is frozen, so its totals (line count, Σ debit, Σ credit, Σ `report_amount`, all lines, intercompany included) never change — compare a new query against them before publishing. The reference totals are kept privately, not in this repo: ask Asaf (finance Dataviz admin) or use the private `finance-dataviz` handbook. For the open year, net income must equal `-SUM(amount)` for the same filters.
