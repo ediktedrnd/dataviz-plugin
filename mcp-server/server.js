@@ -34,9 +34,13 @@ const here = dirname(fileURLToPath(import.meta.url));
 // Remote-specific instructions live alongside the server code.
 // Distinct from the repo-root CLAUDE.md, which still serves the local
 // Claude Code plugin install (with credentials.json setup guidance).
+// INSTRUCTIONS_FILE swaps them for another deployment's (e.g. finance).
 function loadInstructions() {
+  const file = process.env.INSTRUCTIONS_FILE
+    ? resolve(process.env.INSTRUCTIONS_FILE)
+    : resolve(here, 'REMOTE_INSTRUCTIONS.md');
   try {
-    return readFileSync(resolve(here, 'REMOTE_INSTRUCTIONS.md'), 'utf8');
+    return readFileSync(file, 'utf8');
   } catch {
     return undefined;
   }

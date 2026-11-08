@@ -9,6 +9,11 @@
       "name": "dataviz-toolkit",
       "source": "./",
       "description": "Edikted Dataviz platform tools — create dashboards, query data, refresh sources, deploy reports"
+    },
+    {
+      "name": "dataviz-finance",
+      "source": "./plugins/dataviz-finance",
+      "description": "Edikted Finance Dataviz (FP&A) — dashboards and reports on the NetSuite P&L"
     }
   ]
 }
