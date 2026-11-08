@@ -21,16 +21,28 @@ import { homedir, platform } from 'node:os';
 import { dirname, join } from 'node:path';
 import { getRequestContext } from './context.js';
 
+// DATAVIZ_PROFILE gives a plugin its own credentials file, so one machine can
+// hold logins for separate Dataviz deployments (e.g. the dataviz-finance
+// plugin sets DATAVIZ_PROFILE=finance → credentials.finance.json).
+function credentialsFileName() {
+  const profile = (process.env.DATAVIZ_PROFILE || '').trim();
+  if (!profile) return 'credentials.json';
+  if (!/^[a-z0-9_-]+$/i.test(profile)) {
+    throw new Error(`DATAVIZ_PROFILE "${profile}" is invalid — use letters, digits, "-" or "_".`);
+  }
+  return `credentials.${profile}.json`;
+}
+
 function credentialsPath() {
   if (platform() === 'win32') {
     const base = process.env.APPDATA || join(homedir(), 'AppData', 'Roaming');
-    return join(base, 'dataviz', 'credentials.json');
+    return join(base, 'dataviz', credentialsFileName());
   }
-  return join(homedir(), '.config', 'dataviz', 'credentials.json');
+  return join(homedir(), '.config', 'dataviz', credentialsFileName());
 }
 
 const CREDENTIALS_PATH = credentialsPath();
-const DEFAULT_URL = 'https://dataviz.edikted.tech';
+const DEFAULT_URL = (process.env.DATAVIZ_URL || 'https://dataviz.edikted.tech').replace(/\/$/, '');
 const TEMPLATE = {
   url: DEFAULT_URL,
   email: 'your-email@edikted.com',

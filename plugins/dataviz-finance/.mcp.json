@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "dataviz": {
+      "command": "node",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/mcp-server/start.js"],
+      "env": {
+        "DATAVIZ_URL": "https://dataviz.app.finance.edikted.dev",
+        "DATAVIZ_PROFILE": "finance",
+        "CONTEXT_DIR": "${CLAUDE_PLUGIN_ROOT}/context",
+        "SKILLS_DIR": "${CLAUDE_PLUGIN_ROOT}/skills",
+        "INSTRUCTIONS_FILE": "${CLAUDE_PLUGIN_ROOT}/INSTRUCTIONS.md"
+      }
+    }
+  }
+}

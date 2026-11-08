@@ -22,7 +22,9 @@ import { fileURLToPath } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(here, '..');
-const TOP_CONTEXT_DIR = resolve(REPO_ROOT, 'context');
+const TOP_CONTEXT_DIR = process.env.CONTEXT_DIR
+  ? resolve(process.env.CONTEXT_DIR)
+  : resolve(REPO_ROOT, 'context');
 const SKILLS_DIR = process.env.SKILLS_DIR
   ? resolve(process.env.SKILLS_DIR)
   : resolve(REPO_ROOT, 'skills');
