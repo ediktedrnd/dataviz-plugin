@@ -324,6 +324,84 @@ export const TOOLS = [
     },
   },
   {
+    name: 'dataviz_data_security',
+    description: 'Show Data security: the rules that protect sensitive fields (revenue, cost, payroll…), which security groups may see each, whether the rules are applied yet, how many columns they hide, and the security groups with their ids. Admin only. Start here before any change. A rule names fields at the source — a column-name pattern like *revenue*, or table.column like orders.total_price — and every column built from them is hidden automatically, whatever it is renamed to and in every new data source.',
+    inputSchema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'dataviz_data_security_hidden',
+    description: 'List the columns Data security hides, with what each one is built from (e.g. "avg_basket ← total_revenue"). Filter by rule and/or search by table or column name. Use it to answer "is X hidden?" or "what does the Revenue rule cover?". Admin only.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        rule_id: { type: 'number', description: 'Only columns this rule hides (ids from dataviz_data_security)' },
+        search: { type: 'string', description: 'Part of a table or column name' },
+        only_not_hidden_yet: { type: 'boolean', description: 'Only columns the rules would hide that are still readable today (meaningful while the rules are in preview)' },
+        limit: { type: 'number', description: 'Max rows (default 100)' },
+      },
+    },
+  },
+  {
+    name: 'dataviz_data_security_preview',
+    description: 'Preview a change to a Data security rule WITHOUT saving anything: which columns would newly be hidden, which would become visible again, and what changes for groups that are cleared today. ALWAYS call this first and show the user the result before dataviz_data_security_save_rule or dataviz_data_security_delete_rule. Pass `rule` to add (no rule_id) or change (with rule_id) a rule, or `delete_rule_id` to preview a deletion. When changing a rule pass the COMPLETE rule (all its fields, exceptions and groups) — it replaces the old one.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        rule_id: { type: 'number', description: 'Existing rule to change (omit to preview a new rule)' },
+        rule: {
+          type: 'object',
+          description: 'The rule as it should be after the change',
+          properties: {
+            name: { type: 'string' },
+            description: { type: 'string' },
+            fields: { type: 'array', items: { type: 'string' }, description: 'Protected fields: a column name or pattern ("*revenue*"), or one column of a source table ("orders.total_price", "public.payroll.*")' },
+            exceptions: { type: 'array', items: { type: 'string' }, description: 'Columns that stay visible although a field matches: a name or pattern ("cost_currency"), or one column of a DuckDB table ("query_12_orders.total")' },
+            groups: { type: 'array', items: { type: 'string' }, description: 'Security groups that may see these fields, by name (or id). Everyone else gets blank values; admins and creators always see everything.' },
+            enabled: { type: 'boolean' },
+          },
+          required: ['name', 'fields'],
+        },
+        delete_rule_id: { type: 'number', description: 'Preview deleting this rule instead' },
+      },
+    },
+  },
+  {
+    name: 'dataviz_data_security_save_rule',
+    description: 'Create or change a Data security rule. Only after dataviz_data_security_preview was shown to the user and they agreed — set confirmed_by_user: true to say so. Same `rule_id` / `rule` arguments as the preview. Takes effect immediately for every dashboard and report.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        rule_id: { type: 'number', description: 'Existing rule to change (omit to create)' },
+        rule: { type: 'object', description: 'The complete rule (same shape as in dataviz_data_security_preview)' },
+        confirmed_by_user: { type: 'boolean', description: 'true only if the user saw the preview of exactly this change and approved it' },
+      },
+      required: ['rule', 'confirmed_by_user'],
+    },
+  },
+  {
+    name: 'dataviz_data_security_delete_rule',
+    description: 'Delete a Data security rule — the columns only it protects become visible to everyone who can open those reports. Only after the user saw dataviz_data_security_preview({ delete_rule_id }) and agreed.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        rule_id: { type: 'number' },
+        confirmed_by_user: { type: 'boolean', description: 'true only if the user saw the preview of this deletion and approved it' },
+      },
+      required: ['rule_id', 'confirmed_by_user'],
+    },
+  },
+  {
+    name: 'dataviz_data_security_check',
+    description: 'Check Data security. With `user` (email): what that one person can and cannot see, rule by rule, and through which groups. Without it: verify the whole system — every protected column is checked for every kind of access, and (probe: true) a live query per table confirms hidden columns come back blank. Admin only.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        user: { type: 'string', description: 'Email of the person to check (omit to verify everything)' },
+        probe: { type: 'boolean', description: 'Also run a small live query per table (default true)' },
+      },
+    },
+  },
+  {
     name: 'dataviz_set_environment',
     description: 'Switch which Dataviz environment every dataviz_* tool targets: "prod", "staging", or a full https:// base URL. Persists to the local credentials file and re-authenticates on the next call. Local plugin only (no-op on the remote MCP).',
     inputSchema: {
@@ -388,6 +466,51 @@ async function chunkedUploadReport(slug, title, description, jsxSource, baseHash
   });
   const body = await res.json().catch(() => ({}));
   return { ok: res.ok, status: res.status, body };
+}
+
+
+// ── Data security helpers ──────────────────────────────────────
+
+/** A rule as the tools accept it (groups by name or id) → the API body. */
+async function dataSecurityRuleBody(rule) {
+  if (!rule || typeof rule !== 'object') throw new Error('rule is required: { name, fields, exceptions?, groups? }');
+  const body = {
+    name: rule.name,
+    description: rule.description ?? null,
+    fields: rule.fields || [],
+    exceptions: rule.exceptions || [],
+    enabled: rule.enabled !== false,
+    group_ids: [],
+  };
+  const wanted = rule.groups ?? rule.group_ids ?? [];
+  if (wanted.length) {
+    const { groups } = await apiJson('/api/field-security');
+    for (const g of wanted) {
+      const hit = groups.find((x) => String(x.id) === String(g) || x.name.toLowerCase() === String(g).toLowerCase());
+      if (!hit) {
+        const close = groups.filter((x) => x.name.toLowerCase().includes(String(g).toLowerCase())).map((x) => x.name).slice(0, 5);
+        throw new Error(`No security group called "${g}".${close.length ? ` Did you mean: ${close.join(', ')}?` : ''}`);
+      }
+      body.group_ids.push(hit.id);
+    }
+  }
+  return body;
+}
+
+function formatDataSecurityPreview(p, groupNames = new Map()) {
+  const lines = [];
+  if (p.too_many_rows) lines.push(`REFUSED: this would need ${p.policy_rows} access rows and slow dashboards. Let the group see every rule, or give fewer groups partial access.`);
+  lines.push(`Would hide ${p.newly_hidden_count} more column(s) and make ${p.newly_visible_count} visible again.`);
+  for (const r of p.newly_hidden.slice(0, 40)) lines.push(`  hide  ${r.table}.${r.column}  (from ${r.from.join(', ')})`);
+  if (p.newly_hidden_count > 40) lines.push(`  … and ${p.newly_hidden_count - 40} more`);
+  for (const r of p.newly_visible.slice(0, 40)) lines.push(`  show  ${r.table}.${r.column}`);
+  if (p.newly_visible_count > 40) lines.push(`  … and ${p.newly_visible_count - 40} more`);
+  for (const g of p.groups || []) {
+    const parts = [g.loses ? `stops seeing ${g.loses} column(s) it can see today` : null, g.gains ? `starts seeing ${g.gains} column(s)` : null].filter(Boolean);
+    lines.push(`  group ${groupNames.get(g.group_id) || g.group_id}: ${parts.join(', ')}`);
+  }
+  lines.push('Nothing was saved.');
+  return lines.join('\n');
 }
 
 export async function handleTool(name, args) {
@@ -810,6 +933,85 @@ export async function handleTool(name, args) {
         body: JSON.stringify(body),
       });
       return data.ok ? `Email sent to ${args.to.join(', ')}: "${data.report}"` : `Failed: ${data.error}`;
+    }
+
+    case 'dataviz_data_security': {
+      const d = await apiJson('/api/field-security');
+      const name = new Map(d.groups.map((g) => [g.id, g.name]));
+      const lines = [
+        d.enforced
+          ? `Data security is ON: ${d.totals.columns} columns hidden on ${d.totals.tables} tables.`
+          : `Data security is in PREVIEW (not applied yet). The rules would hide ${d.totals.columns} columns on ${d.totals.tables} tables — ${d.pending?.newly_hidden_columns ?? '?'} of them are readable today. An admin turns it on from Admin → Data security.`,
+        '',
+        'Rules:',
+        ...d.rules.map((r) => `[${r.id}] ${r.name}${r.enabled ? '' : ' (off)'} — ${r.columns} columns on ${r.tables} tables\n    fields: ${r.fields.join(', ')}${r.exceptions.length ? `\n    except: ${r.exceptions.join(', ')}` : ''}\n    visible to: ${r.group_ids.map((g) => name.get(g) || g).join(', ') || 'admins and creators only'}`),
+      ];
+      if (d.table_exceptions?.length) lines.push('', 'One-table exceptions (set by an admin outside these rules):', ...d.table_exceptions.map((e) => `  ${e.table_name} → ${e.group_name}`));
+      if (d.review?.length) lines.push('', 'Worth a look:', ...d.review.slice(0, 20).map((r) => `  ${r.table}: ${r.detail}`));
+      lines.push('', 'Security groups (id: name, people):', ...d.groups.map((g) => `  ${g.id}: ${g.name} (${g.member_count})`));
+      return lines.join('\n');
+    }
+
+    case 'dataviz_data_security_hidden': {
+      const params = new URLSearchParams({ limit: String(Math.min(args.limit || 100, 500)), q: args.search || '' });
+      if (args.rule_id != null) params.set('rule', String(args.rule_id));
+      if (args.only_not_hidden_yet) params.set('new', '1');
+      const d = await apiJson(`/api/field-security/hidden?${params}`);
+      if (d.total === 0) return 'No hidden column matches. A column that exists and is not listed is visible to everyone who can open the report.';
+      return [`${d.total} hidden column(s)${d.total > d.rows.length ? ` (first ${d.rows.length})` : ''}:`,
+        ...d.rows.map((r) => `${r.table}.${r.column}${r.derived ? `  ← ${r.from.join(', ')}` : ''}`)].join('\n');
+    }
+
+    case 'dataviz_data_security_preview': {
+      const { groups } = await apiJson('/api/field-security');
+      const names = new Map(groups.map((g) => [g.id, g.name]));
+      const body = args.delete_rule_id != null
+        ? { delete_id: args.delete_rule_id }
+        : { id: args.rule_id ?? null, rule: await dataSecurityRuleBody(args.rule) };
+      const p = await apiJson('/api/field-security/preview', { method: 'POST', body: JSON.stringify(body) });
+      return formatDataSecurityPreview(p, names);
+    }
+
+    case 'dataviz_data_security_save_rule': {
+      if (args.confirmed_by_user !== true) {
+        throw new Error('Not saved. Show the user dataviz_data_security_preview for this exact change first, and call again with confirmed_by_user: true once they agree.');
+      }
+      const body = await dataSecurityRuleBody(args.rule);
+      const d = await apiJson(args.rule_id != null ? `/api/field-security/rules/${args.rule_id}` : '/api/field-security/rules', {
+        method: args.rule_id != null ? 'PUT' : 'POST',
+        body: JSON.stringify(body),
+      });
+      return `Rule "${body.name}" saved (id ${d.id}): ${d.newly_hidden} column(s) newly hidden, ${d.newly_visible} visible again. ` +
+        `Now ${d.sync?.columns} columns hidden on ${d.sync?.tables} tables${d.sync?.enforced ? '' : ' — still in preview, not applied until an admin turns Data security on'}.`;
+    }
+
+    case 'dataviz_data_security_delete_rule': {
+      if (args.confirmed_by_user !== true) {
+        throw new Error('Not deleted. Show the user dataviz_data_security_preview({ delete_rule_id }) first, and call again with confirmed_by_user: true once they agree.');
+      }
+      const d = await apiJson(`/api/field-security/rules/${args.rule_id}`, { method: 'DELETE' });
+      return `Rule ${args.rule_id} deleted: ${d.newly_visible} column(s) are visible again.`;
+    }
+
+    case 'dataviz_data_security_check': {
+      if (args.user) {
+        const d = await apiJson(`/api/field-security/check?user=${encodeURIComponent(args.user)}`);
+        const head = `${d.user.email} (${d.user.role})` + (d.bypass ? ' — sees everything: admins and creators are never restricted.' : `, groups: ${d.groups.map((g) => g.name).join(', ') || 'none'}`);
+        return [head, ...d.rules.map((r) => `  ${r.name}: ${r.access}${r.of_columns ? ` (${r.hidden_columns} of ${r.of_columns} columns hidden)` : ''}${r.own_rows_only ? ` — on store tables, own store only` : ''}`),
+          d.enforced === false && !d.bypass ? 'Note: the rules are in preview — this is what today\'s protection does.' : null].filter(Boolean).join('\n');
+      }
+      const d = await apiJson('/api/field-security/verify', { method: 'POST', body: JSON.stringify({ probe: args.probe !== false }) });
+      if (d.ok) {
+        return `All clear: ${d.checks} column checks across ${d.profiles} kinds of access found nothing exposed` +
+          (d.probe ? `, and a live query on each of ${d.probe.tables} tables returned blanks for every hidden column.` : '.');
+      }
+      if (!d.enforced) {
+        return `Rules are in preview: ${d.drift.reduce((a, x) => a + x.missing.length, 0)} column(s) on ${d.drift.length} table(s) named by the rules are not hidden by today's protection. They will be once an admin turns Data security on.`;
+      }
+      return [`PROBLEMS FOUND — tell an admin now.`,
+        ...d.drift.slice(0, 20).map((x) => `  not hidden yet: ${x.table}: ${x.missing.join(', ')}`),
+        ...d.leaks.slice(0, 20).map((x) => `  readable by ${x.users} people (groups ${x.groups}): ${x.table}.${x.column}`),
+        ...(d.probe?.failed || []).slice(0, 20).map((x) => `  live query: ${x.table}${x.column ? `.${x.column}` : ''}: ${x.error}`)].join('\n');
     }
 
     default:

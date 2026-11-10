@@ -43,6 +43,11 @@ const TOOL_SCOPES = {
   dataviz_upload_csv:       ['dataviz:source:write'],
   dataviz_upload_report:    ['dataviz:report:write'],
   dataviz_send_report:      ['dataviz:report:send'],
+  // Data security: reads need the read scope; the writes carry no scope of
+  // their own — the backend only accepts them from an admin.
+  dataviz_data_security:        ['dataviz:read'],
+  dataviz_data_security_hidden: ['dataviz:read'],
+  dataviz_data_security_check:  ['dataviz:read'],
 };
 
 const encoder = new TextEncoder();
